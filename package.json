@@ -7,16 +7,7 @@
     "build": "remix vite:build",
     "dev": "remix vite:dev",
     "start": "node build/server/index.js",
-    "typecheck": "tsc",
-    "migrate": "npx tsx scripts/migrate/run-all.ts",
-    "migrate:clear": "npx tsx scripts/migrate/00-clear.ts",
-    "migrate:users": "npx tsx scripts/migrate/01-users.ts",
-    "migrate:avvocati": "npx tsx scripts/migrate/02-avvocati.ts",
-    "migrate:soggetti": "npx tsx scripts/migrate/03-soggetti.ts",
-    "migrate:mediazioni": "npx tsx scripts/migrate/04-mediazioni.ts",
-    "migrate:convocazioni": "npx tsx scripts/migrate/05-convocazioni.ts",
-    "migrate:fatture": "npx tsx scripts/migrate/06-fatture.ts",
-    "seed:config": "npx tsx scripts/migrate/seed-config-from-pdf.ts"
+    "typecheck": "tsc"
   },
   "dependencies": {
     "@remix-run/node": "^2.15.0",
@@ -28,14 +19,6 @@
     "react-dom": "^18.3.1",
     "recharts": "^3.7.0",
     "xlsx": "^0.18.5"
-  },
-  "pnpm": {
-    "supportedArchitectures": {
-      "os": ["darwin", "linux", "current"],
-      "cpu": ["arm64", "x64", "current"],
-      "libc": ["glibc", "musl"]
-    },
-    "onlyBuiltDependencies": ["esbuild"]
   },
   "devDependencies": {
     "@remix-run/dev": "^2.15.0",
