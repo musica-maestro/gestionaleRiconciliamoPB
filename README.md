@@ -5,7 +5,7 @@ Remix (Vite) + PocketBase app for managing mediazioni, rubrica, fatture and user
 ## Prerequisiti
 
 - **PocketBase** in esecuzione (es. `http://127.0.0.1:8090`) con le collection e gli utenti configurati.
-- **Node 18+** e **pnpm**.
+- **Node 20+** (LTS) e **pnpm**.
 
 ## Setup
 
@@ -22,6 +22,11 @@ cp .env.example .env   # opzionale: imposta POCKETBASE_URL e SESSION_SECRET
 | `pnpm run build` | Build di produzione      |
 | `pnpm run start` | Avvia il server di build |
 | `pnpm run typecheck` | Controllo TypeScript   |
+
+## Docker
+
+- **Produzione / Coolify**: `docker compose up -d`. Crea `.env` da `.env.example` con `POCKETBASE_URL` e `SESSION_SECRET`. L’app è in ascolto sulla porta **3000**.
+- **Sviluppo locale in container**: `docker compose -f docker-compose.dev.yml up --build`. Per PocketBase sulla host machine usa `POCKETBASE_URL=http://host.docker.internal:8090`.
 
 ## Ruoli e accesso
 

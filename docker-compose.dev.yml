@@ -1,13 +1,14 @@
-# Gestionale Mediazioni - Production / Coolify-friendly compose
-# Create .env from .env.example and set POCKETBASE_URL + SESSION_SECRET, then: docker compose up -d
+# Gestionale Mediazioni - Local development with Docker
+# Usage: docker compose -f docker-compose.dev.yml up --build
+# Set POCKETBASE_URL in .env (e.g. http://host.docker.internal:8090 for PocketBase on host)
 
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile
-    image: gestionale:latest
-    container_name: gestionale
+    image: gestionale:dev
+    container_name: gestionale-dev
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -15,11 +16,11 @@ services:
       NODE_ENV: production
       PORT: 3000
       HOST: 0.0.0.0
-      POCKETBASE_URL: ${POCKETBASE_URL:-http://127.0.0.1:8090}
+      POCKETBASE_URL: ${POCKETBASE_URL:-http://host.docker.internal:8090}
       SESSION_SECRET: ${SESSION_SECRET:-}
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/', (r) => process.exit([200,302].includes(r.statusCode) ? 0 : 1)).on('error', () => process.exit(1))"]
-      interval: 30s
+      interval: 15s
       timeout: 5s
-      start_period: 10s
+      start_period: 15s
       retries: 3
