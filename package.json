@@ -29,6 +29,14 @@
     "recharts": "^3.7.0",
     "xlsx": "^0.18.5"
   },
+  "pnpm": {
+    "supportedArchitectures": {
+      "os": ["darwin", "linux", "current"],
+      "cpu": ["arm64", "x64", "current"],
+      "libc": ["glibc", "musl"]
+    },
+    "onlyBuiltDependencies": ["esbuild"]
+  },
   "devDependencies": {
     "@remix-run/dev": "^2.15.0",
     "@tailwindcss/vite": "^4.2.1",
