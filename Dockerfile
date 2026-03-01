@@ -18,6 +18,10 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./
 EXPOSE 3000
 ENV NODE_ENV=production
-ENV APP_HOST=0.0.0.0
-ENV APP_PORT=3000
-CMD ["node", "build/server/index.js"]
+# Remix serve uses PORT and HOST (must be 0.0.0.0 for Coolify/Docker)
+ENV PORT=3000
+ENV HOST=0.0.0.0
+# Coolify v4: set Application Port to 3000 in Network settings
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "require('http').get('http://127.0.0.1:3000/', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+CMD ["remix-serve", "build/server/index.js"]

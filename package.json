@@ -6,11 +6,12 @@
   "scripts": {
     "build": "remix vite:build",
     "dev": "remix vite:dev",
-    "start": "node build/server/index.js",
+    "start": "remix-serve build/server/index.js",
     "typecheck": "tsc"
   },
   "dependencies": {
     "@remix-run/node": "^2.15.0",
+    "@remix-run/serve": "^2.15.0",
     "@remix-run/react": "^2.15.0",
     "daisyui": "^5.5.19",
     "lucide-react": "^0.575.0",
