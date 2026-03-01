@@ -1,13 +1,16 @@
-FROM node:18-alpine AS build
-RUN npm install -g pnpm
+# Use Debian-based image so @tailwindcss/oxide optional bindings (linux-x64-gnu) install correctly.
+# Alpine (musl) often fails to get oxide-linux-x64-musl with pnpm.
+FROM node:18-slim AS build
+RUN apt-get update -y && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN corepack enable && corepack prepare pnpm@latest --activate
 WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
-RUN pnpm install
+RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm run build
 RUN pnpm prune --prod
 
-FROM node:18-alpine
+FROM node:18-slim
 WORKDIR /app
 COPY --from=build /app/build ./build
 COPY --from=build /app/public ./public
