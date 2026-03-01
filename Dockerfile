@@ -20,25 +20,13 @@ RUN pnpm install --frozen-lockfile
 FROM base AS build
 COPY . .
 COPY --from=dependencies /app/node_modules ./node_modules
-# Let Tailwind install the correct oxide binary for this platform (Linux in Docker).
-# Avoid OOM in constrained CI/Coolify environments; non-interactive build.
+# Mac dev: irrelevant. Ubuntu/Coolify deploy: gives Node more heap during Vite build (avoids OOM).
 ENV CI=true
 ENV NODE_OPTIONS="--max-old-space-size=4096"
 RUN pnpm run build
 
-# Production stage
-# Note: Image is large (~1GB+) due to LibreOffice. Prefer building in CI and pushing to a registry
-# so the Coolify server doesn't run out of disk during "exporting layers".
+# Production stage (develop on Mac, deploy on Ubuntu)
 FROM node:18-alpine AS production
-
-# Install pnpm, LibreOffice (for DOCX→PDF in Flusso export), and fonts so PDF text renders (no white boxes)
-# Liberation ≈ Arial/Helvetica; DejaVu = good Unicode; fontconfig so LibreOffice finds them
-RUN npm install -g pnpm && apk add --no-cache \
-    libreoffice \
-    fontconfig \
-    ttf-dejavu \
-    font-liberation \
-    && fc-cache -f
 
 # Create non-root user for security
 RUN addgroup --system --gid 1001 nodejs
