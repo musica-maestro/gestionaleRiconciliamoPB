@@ -26,6 +26,7 @@ cp .env.example .env   # opzionale: imposta POCKETBASE_URL e SESSION_SECRET
 ## Docker
 
 - **Produzione / Coolify**: `docker compose up -d`. Crea `.env` da `.env.example` con `POCKETBASE_URL` e `SESSION_SECRET`. L’app è in ascolto sulla porta **3000**.
+- **Solo VPN (WireGuard Easy)**: vedi [docs/VPN-ACCESS.md](docs/VPN-ACCESS.md) — stack Docker con Traefik (`docker-compose.vpn.yml`) oppure label da aggiungere in Coolify.
 - **Sviluppo locale in container**: `docker compose -f docker-compose.dev.yml up --build`. Per PocketBase sulla host machine usa `POCKETBASE_URL=http://host.docker.internal:8090`.
 
 ## Ruoli e accesso

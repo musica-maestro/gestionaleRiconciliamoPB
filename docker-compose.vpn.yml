@@ -1,0 +1,47 @@
+# Gestionale Mediazioni - VPN-only (WireGuard) stack
+# Only clients in the VPN subnet (default WireGuard Easy 10.8.0.0/24) can reach the app.
+# Usage: set DOMAIN (or use default), then: docker compose -f docker-compose.vpn.yml up -d
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gestionale:latest
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+      POCKETBASE_URL: ${POCKETBASE_URL:-http://127.0.0.1:8090}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+    labels:
+      - "traefik.enable=true"
+      # Only allow WireGuard Easy default subnet (change if your VPN uses another CIDR)
+      - "traefik.http.middlewares.gestionale-vpnonly.ipallowlist.sourcerange=${VPN_SOURCERANGE:-10.8.0.0/24}"
+      - "traefik.http.routers.gestionale.rule=Host(`${DOMAIN:-gestionale.local}`)"
+      - "traefik.http.routers.gestionale.entrypoints=web"
+      - "traefik.http.routers.gestionale.middlewares=gestionale-vpnonly"
+      - "traefik.http.services.gestionale.loadbalancer.server.port=3000"
+    networks:
+      - traefik
+
+  traefik:
+    image: traefik:v3.2
+    container_name: traefik-gestionale
+    restart: unless-stopped
+    command:
+      - "--api.dashboard=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - traefik
+
+networks:
+  traefik:
+    driver: bridge
