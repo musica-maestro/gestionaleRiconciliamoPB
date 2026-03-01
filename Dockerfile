@@ -20,6 +20,10 @@ RUN pnpm install --frozen-lockfile
 FROM base AS build
 COPY . .
 COPY --from=dependencies /app/node_modules ./node_modules
+# Let Tailwind install the correct oxide binary for this platform (Linux in Docker).
+# Avoid OOM in constrained CI/Coolify environments; non-interactive build.
+ENV CI=true
+ENV NODE_OPTIONS="--max-old-space-size=4096"
 RUN pnpm run build
 
 # Production stage
