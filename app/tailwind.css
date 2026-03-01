@@ -1,0 +1,29 @@
+@import "tailwindcss";
+@plugin "daisyui";
+@plugin "daisyui/theme" {
+  name: "light";
+  default: true;
+  color-scheme: light;
+  --color-primary: #3aaeba;
+  --color-primary-content: #ffffff;
+  --color-accent: #3aaeba;
+  --color-accent-content: #ffffff;
+}
+
+@layer base {
+  body {
+    font-family: 'Poppins', sans-serif;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Poppins', sans-serif;
+    font-weight: 700;
+  }
+
+  /* Lucide icons: prevent collapse in flex, ensure visibility */
+  svg.lucide {
+    flex-shrink: 0;
+    display: inline-block;
+    vertical-align: middle;
+  }
+}

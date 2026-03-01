@@ -1,0 +1,42 @@
+{
+  "name": "gestionale",
+  "private": true,
+  "sideEffects": false,
+  "type": "module",
+  "scripts": {
+    "build": "remix vite:build",
+    "dev": "remix vite:dev",
+    "start": "node build/server/index.js",
+    "typecheck": "tsc",
+    "migrate": "npx tsx scripts/migrate/run-all.ts",
+    "migrate:clear": "npx tsx scripts/migrate/00-clear.ts",
+    "migrate:users": "npx tsx scripts/migrate/01-users.ts",
+    "migrate:avvocati": "npx tsx scripts/migrate/02-avvocati.ts",
+    "migrate:soggetti": "npx tsx scripts/migrate/03-soggetti.ts",
+    "migrate:mediazioni": "npx tsx scripts/migrate/04-mediazioni.ts",
+    "migrate:convocazioni": "npx tsx scripts/migrate/05-convocazioni.ts",
+    "migrate:fatture": "npx tsx scripts/migrate/06-fatture.ts",
+    "seed:config": "npx tsx scripts/migrate/seed-config-from-pdf.ts"
+  },
+  "dependencies": {
+    "@remix-run/node": "^2.15.0",
+    "@remix-run/react": "^2.15.0",
+    "daisyui": "^5.5.19",
+    "lucide-react": "^0.575.0",
+    "pocketbase": "^0.21.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^3.7.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@remix-run/dev": "^2.15.0",
+    "@tailwindcss/oxide-darwin-arm64": "^4.2.1",
+    "@tailwindcss/vite": "^4.2.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "tailwindcss": "^4.2.1",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.1"
+  }
+}

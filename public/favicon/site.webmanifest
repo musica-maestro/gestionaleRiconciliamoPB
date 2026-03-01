@@ -1,0 +1,21 @@
+{
+  "name": "Riconciliamo",
+  "short_name": "Riconciliamo",
+  "icons": [
+    {
+      "src": "/favicon/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "theme_color": "#3aaeba",
+  "background_color": "#3aaeba",
+  "display": "standalone"
+}
