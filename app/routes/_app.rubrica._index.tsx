@@ -27,6 +27,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const tabParam = url.searchParams.get("tab");
   const tab = tabParam === "giuridiche" || tabParam === "avvocati" ? tabParam : "fisiche";
   const q = url.searchParams.get("q")?.trim() ?? "";
+  const cognome = url.searchParams.get("cognome")?.trim() ?? "";
   const comune = url.searchParams.get("comune")?.trim() ?? "";
   const cf = url.searchParams.get("cf")?.trim() ?? "";
   const provincia = url.searchParams.get("provincia")?.trim() ?? "";
@@ -36,7 +37,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const pec_avv = url.searchParams.get("pec_avv")?.trim() ?? "";
   const telefono = url.searchParams.get("telefono")?.trim() ?? "";
   const tessera_foro = url.searchParams.get("tessera_foro")?.trim() ?? "";
-  const sortF = url.searchParams.get("sort_f") || "display";
+  const sortF = url.searchParams.get("sort_f") || "cognome";
   const orderF = url.searchParams.get("order_f") === "asc" ? "asc" : "desc";
   const sortG = url.searchParams.get("sort_g") || "display";
   const orderG = url.searchParams.get("order_g") === "asc" ? "asc" : "desc";
@@ -104,7 +105,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const soggettiRespList = soggettiResp as Record<string, unknown>[];
   const soggettiFisiciRaw = soggettiRespList.filter((s: Record<string, unknown>) => s.tipo === "Fisica");
   const soggettiGiuridiciRaw = soggettiRespList.filter((s: Record<string, unknown>) => s.tipo === "Giuridica");
-  const soggettiFisiciFiltered = applySoggettiFilters(soggettiFisiciRaw);
+  let soggettiFisiciFiltered = applySoggettiFilters(soggettiFisiciRaw);
+  if (cognome) {
+    const cognomeLower = cognome.toLowerCase();
+    soggettiFisiciFiltered = soggettiFisiciFiltered.filter((s: Record<string, unknown>) =>
+      String(s.cognome ?? "").toLowerCase().includes(cognomeLower)
+    );
+  }
   const soggettiGiuridiciFiltered = applySoggettiFilters(soggettiGiuridiciRaw);
 
   let avvocatiList = avvocatiResp as Record<string, unknown>[];
@@ -192,7 +199,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
     "display",
     "asc"
   );
-  const allSoggettiForMerge: RubricaItem[] = allSoggettiSorted.map((s) => ({ id: s.id, display: s.display }));
+  const allSoggettiForMerge: RubricaItem[] = allSoggettiSorted.map((s) => ({
+    id: s.id,
+    display: s.display,
+    codiceFiscale: s.codice_fiscale || undefined,
+  }));
   const allAvvocatiForMerge: RubricaItem[] = avvocatiSorted.map((a) => ({ id: a.id, display: a.display }));
 
   return json({
@@ -203,7 +214,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     allAvvocatiForMerge,
     q,
     tab,
-    filters: { comune, cf, provincia, cap, email_pec, foro, pec_avv, telefono, tessera_foro },
+    filters: { cognome, comune, cf, provincia, cap, email_pec, foro, pec_avv, telefono, tessera_foro },
     sortF,
     orderF,
     sortG,
@@ -619,11 +630,17 @@ export default function RubricaIndex() {
               <table className="table table-sm w-full min-w-[800px]">
                 <thead className={`sticky top-0 z-10 shadow-sm ${headerBgSolid}`}>
                 <tr>
-                  <th className={`${filterableTableThClass} min-w-[100px]`}>
+                  <th className={`${filterableTableThClass} min-w-[80px]`}>
                     <div className={filterableTableHeaderLabelClass}>
-                      <SortLink label="Nome" field="display" {...sortLinkPropsF} />
+                      <SortLink label="Nome" field="nome" {...sortLinkPropsF} />
                     </div>
                     <FilterTextInput name="q" type="search" defaultValue={q} placeholder="Cerca…" />
+                  </th>
+                  <th className={`${filterableTableThClass} min-w-[80px]`}>
+                    <div className={filterableTableHeaderLabelClass}>
+                      <SortLink label="Cognome" field="cognome" {...sortLinkPropsF} />
+                    </div>
+                    <FilterTextInput name="cognome" defaultValue={filters.cognome} placeholder="Cognome" />
                   </th>
                   <th className={filterableTableThClass}>
                     <div className={filterableTableHeaderLabelClass}>
@@ -661,14 +678,15 @@ export default function RubricaIndex() {
               <tbody>
                 {fisiche.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="text-center text-base-content/70 py-12">
+                    <td colSpan={8} className="text-center text-base-content/70 py-12">
                       Nessuna persona fisica trovata.
                     </td>
                   </tr>
                 ) : (
                   fisiche.map((s, idx) => (
                     <tr key={String(s.id)} className="hover" style={idx % 2 === 1 ? zebraEven : undefined}>
-                      <td className="py-2"><Link to={`/rubrica/soggetti/${s.id}`} className="link link-hover font-medium">{s.display}</Link></td>
+                      <td className="py-2">{s.nome || "—"}</td>
+                      <td className="py-2"><Link to={`/rubrica/soggetti/${s.id}`} className="link link-hover font-medium">{s.cognome || "—"}</Link></td>
                       <td className="py-2">{s.codice_fiscale || "—"}</td>
                       <td className="py-2">{s.comune || "—"}</td>
                       <td className="py-2">{s.provincia || "—"}</td>

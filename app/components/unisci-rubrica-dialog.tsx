@@ -5,6 +5,8 @@ export type RubricaKind = "soggetti" | "avvocati";
 export interface RubricaItem {
   id: string;
   display: string;
+  /** Codice fiscale (soggetti only); used for search and shown in list */
+  codiceFiscale?: string;
 }
 
 export interface UnisciRubricaDialogProps {
@@ -36,7 +38,11 @@ export function UnisciRubricaDialog({
   const filtered = useMemo(() => {
     if (!search.trim()) return candidates;
     const q = search.toLowerCase().trim();
-    return candidates.filter((i) => i.display.toLowerCase().includes(q));
+    return candidates.filter((i) => {
+      const matchDisplay = i.display.toLowerCase().includes(q);
+      const matchCf = i.codiceFiscale?.toLowerCase().includes(q);
+      return matchDisplay || matchCf;
+    });
   }, [candidates, search]);
 
   const handleConfirm = () => {
@@ -73,7 +79,7 @@ export function UnisciRubricaDialog({
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Cerca nome, PEC…"
+            placeholder={kind === "soggetti" ? "Cerca nome, CF…" : "Cerca nome, PEC…"}
             className="input input-bordered input-sm w-full"
             autoFocus
           />
@@ -93,7 +99,10 @@ export function UnisciRubricaDialog({
                     onClick={() => setSelectedId(item.id)}
                     className={`w-full text-left px-4 py-3 text-sm hover:bg-base-200 transition-colors ${selectedId === item.id ? "bg-primary/15 text-primary font-medium" : ""}`}
                   >
-                    {item.display}
+                    <span className="block font-medium">{item.display}</span>
+                    {item.codiceFiscale ? (
+                      <span className="block text-xs text-base-content/60 mt-0.5">CF: {item.codiceFiscale}</span>
+                    ) : null}
                   </button>
                 </li>
               ))
