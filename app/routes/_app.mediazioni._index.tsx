@@ -464,7 +464,7 @@ export default function MediazioniList() {
                   <FilterTextInput name="nota" defaultValue={filters.nota} placeholder="Cerca nota" />
                 </th>
                 <th
-                  className={`${filterableTableThClass} w-[100px] shrink-0 sticky top-0 right-0 z-20 border-l border-base-200 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.05)] ${headerBgSolid}`}
+                  className={`${filterableTableThClass} w-[100px] shrink-0 sticky top-0 right-0 z-20 border-l border-base-200 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.05)] ${headerBgSolid} text-right`}
                   style={{ right: "-2px" }}
                 >
                   <div className={filterableTableHeaderLabelClass}>Azioni</div>
@@ -539,7 +539,7 @@ export default function MediazioniList() {
                       }`}
                       style={{ right: "-2px" }}
                     >
-                      <div className="flex items-start gap-1">
+                      <div className="flex items-start gap-1 justify-end">
                         {m.nota && m.nota !== "—" && (
                           <button
                             type="button"

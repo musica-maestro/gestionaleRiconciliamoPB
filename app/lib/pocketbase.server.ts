@@ -6,6 +6,11 @@ const POCKETBASE_URL = process.env.POCKETBASE_URL ?? "http://127.0.0.1:8090";
 
 export type { PbUser };
 
+/** Base URL for PocketBase (e.g. for building file URLs). */
+export function getPocketbaseBaseUrl(): string {
+  return POCKETBASE_URL;
+}
+
 /**
  * Create a PocketBase client for server-side use.
  * Restores auth from session cookie if present.

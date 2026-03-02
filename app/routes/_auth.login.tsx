@@ -46,6 +46,7 @@ export async function action({ request }: ActionFunctionArgs) {
       stato: record.stato,
       ruoli: Array.isArray(ruoli) ? ruoli : [ruoli].filter(Boolean),
       ruolo_corrente: ruoloCorrente,
+      avatar: typeof record.avatar === "string" ? record.avatar : undefined,
     } satisfies PbUser);
 
     return redirect("/dashboard", {

@@ -10,18 +10,33 @@ function navLinkClass(path: string, currentPath: string) {
   return isActive ? "btn btn-primary btn-sm m-2" : "btn btn-ghost btn-sm m-2";
 }
 
+const ChevronDown = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    className="h-4 w-4 ml-1 opacity-70"
+    fill="none"
+    viewBox="0 0 24 24"
+    stroke="currentColor"
+  >
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+  </svg>
+);
+
 export function TopNav({
   user,
+  avatarUrl,
   showFatture,
   showAdmin,
 }: {
   user: PbUser;
+  avatarUrl: string | null;
   showFatture: boolean;
   showAdmin: boolean;
 }) {
   const { pathname } = useLocation();
   const mobileAdminRef = useRef<HTMLDetailsElement | null>(null);
   const desktopAdminRef = useRef<HTMLDetailsElement | null>(null);
+  const userMenuRef = useRef<HTMLDetailsElement | null>(null);
 
   useEffect(() => {
     if (mobileAdminRef.current) {
@@ -29,6 +44,9 @@ export function TopNav({
     }
     if (desktopAdminRef.current) {
       desktopAdminRef.current.open = false;
+    }
+    if (userMenuRef.current) {
+      userMenuRef.current.open = false;
     }
   }, [pathname]);
 
@@ -159,20 +177,42 @@ export function TopNav({
         </ul>
       </div>
       <div className="navbar-end gap-2">
-        <span className="text-sm text-base-content/70">
-          {user.name || user.email} · {user.ruolo_corrente ?? user.ruoli?.[0] ?? "—"}
-        </span>
-        <Link
-          to="/settings"
-          className={pathname === "/settings" ? "btn btn-primary btn-sm" : "btn btn-ghost btn-sm"}
-        >
-          Impostazioni
-        </Link>
-        <Form method="post" action="/logout">
-          <button type="submit" className="btn btn-ghost btn-sm">
-            Esci
-          </button>
-        </Form>
+        <details ref={userMenuRef} className="dropdown dropdown-end">
+          <summary
+            className={`btn btn-ghost btn-sm marker:content-none list-none flex items-center gap-1 ${pathname === "/settings" ? "btn-primary" : ""}`}
+          >
+            {avatarUrl ? (
+              <img
+                src={avatarUrl}
+                alt=""
+                className="h-6 w-6 rounded-full object-cover"
+              />
+            ) : (
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-base-300 text-base-content/70 text-xs font-medium">
+                {(user.name || user.email || "?").charAt(0).toUpperCase()}
+              </span>
+            )}
+            <span className="text-sm text-base-content/70 max-w-[120px] truncate">
+              {user.name || user.email} · {user.ruolo_corrente ?? user.ruoli?.[0] ?? "—"}
+            </span>
+            <ChevronDown />
+          </summary>
+          <ul
+            tabIndex={0}
+            className="menu menu-sm dropdown-content mt-2 z-40 p-2 shadow bg-base-100 rounded-box w-52 border border-base-300"
+          >
+            <li>
+              <Link to="/settings">Modifica profilo</Link>
+            </li>
+            <li>
+              <Form method="post" action="/logout">
+                <button type="submit" className="w-full text-left">
+                  Esci
+                </button>
+              </Form>
+            </li>
+          </ul>
+        </details>
       </div>
     </div>
   );
