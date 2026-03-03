@@ -662,11 +662,11 @@ export const meta: MetaFunction<typeof loader> = ({ data }) => {
 
 const ESITO_OPTIONS = [
   "",
-  "In corso",
   "Accordo",
   "Mancato accordo",
   "Improcedibile",
   "Chiusa d'ufficio",
+  "Nessuna risposta",
 ];
 
 const TABS = [

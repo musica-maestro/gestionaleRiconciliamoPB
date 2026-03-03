@@ -19,7 +19,7 @@ import {
 import { ExportMediazioniDialog } from "~/components/export-mediazioni-dialog";
 import { Eye, MoreVertical, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from "lucide-react";
 
-const ESITO_OPTIONS = ["In corso", "Accordo", "Mancato accordo", "Improcedibile", "Chiusa d'ufficio"].map((label) => ({ value: label, label }));
+const ESITO_OPTIONS = ["Accordo", "Mancato accordo", "Improcedibile", "Chiusa d'ufficio", "Nessuna risposta"].map((label) => ({ value: label, label }));
 const PER_PAGE_OPTIONS = [10, 25, 50, 100] as const;
 const SORT_FIELDS = ["rgm", "oggetto", "data_protocollo", "data_chiusura", "esito_finale", "modalita_mediazione", "competenza", "mediatore_name"] as const;
 const MAIN_COLOR = "#3aaeba";

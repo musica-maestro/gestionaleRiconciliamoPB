@@ -180,11 +180,11 @@ export default function NewMediazione() {
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 focus:ring-2 focus:ring-blue-500"
             >
               <option value="">—</option>
-              <option value="In corso">In corso</option>
               <option value="Accordo">Accordo</option>
               <option value="Mancato accordo">Mancato accordo</option>
               <option value="Improcedibile">Improcedibile</option>
               <option value="Chiusa d'ufficio">Chiusa d'ufficio</option>
+              <option value="Nessuna risposta">Nessuna risposta</option>
             </select>
           </div>
 
