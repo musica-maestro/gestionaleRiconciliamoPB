@@ -1,18 +1,37 @@
 import { useState, useRef } from "react";
-import { Link, useFetcher } from "@remix-run/react";
+import { Link, useFetcher, useLoaderData } from "@remix-run/react";
 import { json, redirect, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
 import * as XLSX from "xlsx";
 import { requireUserAndRole } from "~/lib/auth.server";
 import { createPB } from "~/lib/pocketbase.server";
 import { mapExcelRowsToImport, type ImportRow } from "~/lib/import-mediazioni-mapping";
 import { importRows } from "~/lib/import-mediazioni.server";
-import { Upload, FileSpreadsheet, Loader2 } from "lucide-react";
+import { Upload, FileSpreadsheet, Loader2, ExternalLink, UserCheck, UserPlus } from "lucide-react";
 
 export const meta = () => [{ title: "Importa mediazioni" }];
 
 export async function loader({ request }: LoaderFunctionArgs) {
   await requireUserAndRole(request, "admin", "manager");
-  return json({});
+  const { pb } = await createPB(request);
+  const soggetti = await pb
+    .collection("soggetti")
+    .getFullList({
+      fields: "id,nome,cognome,codice_fiscale,indirizzo_riga_1,comune,provincia,cap",
+      sort: "cognome,nome",
+    })
+    .catch(() => []);
+  return json({
+    soggetti: soggetti as Array<{
+      id: string;
+      nome?: string;
+      cognome?: string;
+      codice_fiscale?: string;
+      indirizzo_riga_1?: string;
+      comune?: string;
+      provincia?: string;
+      cap?: string;
+    }>,
+  });
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -63,7 +82,52 @@ function getChiamatoLabel(row: ImportRow): string {
   return [n, c].filter(Boolean).join(" ") || "—";
 }
 
+/** Formatta una data in italiano (g/m/aaaa). Accetta YYYY-MM-DD o formato US M/D/YY. */
+function formatDateIT(value: string | null | undefined): string {
+  if (!value?.trim()) return "—";
+  const s = value.trim();
+  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (iso) {
+    const [, y, m, d] = iso;
+    return `${Number(d)}/${Number(m)}/${y}`;
+  }
+  const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (us) {
+    const [, m, d, y] = us;
+    const year = y!.length === 2 ? `20${y}` : y;
+    return `${Number(d)}/${Number(m)}/${year}`;
+  }
+  return s;
+}
+
+type SoggettoMatch = { id: string; inDb: true } | { inDb: false };
+function matchSoggetto(
+  soggetti: Array<{ id: string; nome?: string; cognome?: string; codice_fiscale?: string }>,
+  parte: { nome: string; cognome: string; codice_fiscale: string }
+): SoggettoMatch {
+  const cf = (parte.codice_fiscale || "").trim().toUpperCase();
+  if (cf) {
+    const byCf = soggetti.find(
+      (s) => (s.codice_fiscale || "").trim().toUpperCase() === cf
+    );
+    if (byCf) return { id: byCf.id, inDb: true };
+  }
+  const nome = (parte.nome || "").trim().toLowerCase();
+  const cognome = (parte.cognome || "").trim().toLowerCase();
+  if (nome || cognome) {
+    const byName = soggetti.find((s) => {
+      const sn = (s.nome || "").trim().toLowerCase();
+      const sc = (s.cognome || "").trim().toLowerCase();
+      return sn === nome && sc === cognome;
+    });
+    if (byName) return { id: byName.id, inDb: true };
+  }
+  return { inDb: false };
+}
+
 export default function ImportMediazioni() {
+  const loaderData = useLoaderData<typeof loader>();
+  const soggetti = loaderData?.soggetti ?? [];
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [parsedRows, setParsedRows] = useState<ImportRow[]>([]);
   const fetcher = useFetcher<typeof action>();
@@ -117,7 +181,7 @@ export default function ImportMediazioni() {
   };
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-6">
+    <div className="mx-auto max-w-[100rem] w-full px-4 py-6">
       <div className="mb-6">
         <Link
           to="/mediazioni"
@@ -158,36 +222,116 @@ export default function ImportMediazioni() {
       </div>
 
       {parsedRows.length > 0 && (
-        <div className="overflow-x-auto border border-slate-200 rounded-lg mb-6">
-          <table className="table table-zebra table-pin-rows">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>RGM</th>
-                <th>Mediatore</th>
-                <th>Istante</th>
-                <th>Chiamato</th>
-                <th>Oggetto / Materia</th>
-                <th>Valore</th>
-                <th>Competenza</th>
-              </tr>
-            </thead>
-            <tbody>
-              {parsedRows.map((row) => (
-                <tr key={row.index}>
-                  <td>{row.index}</td>
-                  <td>{row.mediazionePayload.rgm}</td>
-                  <td>{row.mediazionePayload.mediatore}</td>
-                  <td>{getIstanteLabel(row)}</td>
-                  <td>{getChiamatoLabel(row)}</td>
-                  <td>{row.mediazionePayload.oggetto}</td>
-                  <td>{row.mediazionePayload.valore}</td>
-                  <td>{row.mediazionePayload.competenza}</td>
+        <>
+          <p className="text-sm text-slate-600 mb-2">
+            Controlla i dati qui sotto. Istante/Chiamato in DB verranno riutilizzati (campi vuoti aggiornati dall’Excel).
+            Link Istanza e Cartella → documenti. Data e ora incontro → record in Incontri.
+          </p>
+          <div className="overflow-x-auto border border-slate-200 rounded-lg mb-6">
+            <table className="table table-zebra table-pin-rows min-w-[900px]">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>RGM</th>
+                  <th>Mediatore</th>
+                  <th>Istante</th>
+                  <th>Chiamato</th>
+                  <th>Link Istanza</th>
+                  <th>Link Cartella</th>
+                  <th>Incontro (data · ora)</th>
+                  <th>Oggetto / Materia</th>
+                  <th>Valore</th>
+                  <th>Competenza</th>
+                  <th>Data deposito</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {parsedRows.map((row) => {
+                  const istanteMatch = matchSoggetto(soggetti, row.parteIstante);
+                  const chiamatoMatch = matchSoggetto(soggetti, row.parteChiamato);
+                  const linkIstanza = (row.mediazionePayload.link_istanza || "").trim();
+                  const linkCartella = (row.mediazionePayload.link_cartella || "").trim();
+                  const isUrl = (s: string) =>
+                    s.startsWith("http://") || s.startsWith("https://");
+                  return (
+                    <tr key={row.index}>
+                      <td>{row.index}</td>
+                      <td className="font-medium">{row.mediazionePayload.rgm || "—"}</td>
+                      <td>{row.mediazionePayload.mediatore || "—"}</td>
+                      <td className="whitespace-nowrap">
+                        <span className="inline-flex items-center gap-1.5">
+                          <span>{getIstanteLabel(row) || "—"}</span>
+                          {istanteMatch.inDb ? (
+                            <span className="badge badge-sm badge-info shrink-0 gap-0.5" title="Già in rubrica">
+                              <UserCheck className="w-3 h-3" /> In DB
+                            </span>
+                          ) : (
+                            <span className="badge badge-sm badge-ghost shrink-0 gap-0.5" title="Nuovo soggetto">
+                              <UserPlus className="w-3 h-3" /> Nuovo
+                            </span>
+                          )}
+                        </span>
+                      </td>
+                      <td className="whitespace-nowrap">
+                        <span className="inline-flex items-center gap-1.5">
+                          <span>{getChiamatoLabel(row) || "—"}</span>
+                          {chiamatoMatch.inDb ? (
+                            <span className="badge badge-sm badge-info shrink-0 gap-0.5" title="Già in rubrica">
+                              <UserCheck className="w-3 h-3" /> In DB
+                            </span>
+                          ) : (
+                            <span className="badge badge-sm badge-ghost shrink-0 gap-0.5" title="Nuovo soggetto">
+                              <UserPlus className="w-3 h-3" /> Nuovo
+                            </span>
+                          )}
+                        </span>
+                      </td>
+                      <td>
+                        {linkIstanza && isUrl(linkIstanza) ? (
+                          <a
+                            href={linkIstanza}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="link link-primary text-xs inline-flex items-center gap-0.5"
+                          >
+                            Apri <ExternalLink className="w-3 h-3" />
+                          </a>
+                        ) : (
+                          linkIstanza ? <span className="text-slate-500 text-xs break-all">{linkIstanza.length > 40 ? `${linkIstanza.slice(0, 40)}…` : linkIstanza}</span> : "—"
+                        )}
+                      </td>
+                      <td>
+                        {linkCartella && isUrl(linkCartella) ? (
+                          <a
+                            href={linkCartella}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="link link-primary text-xs inline-flex items-center gap-0.5"
+                          >
+                            Apri <ExternalLink className="w-3 h-3" />
+                          </a>
+                        ) : (
+                          linkCartella ? <span className="text-slate-500 text-xs break-all">{linkCartella.length > 40 ? `${linkCartella.slice(0, 40)}…` : linkCartella}</span> : "—"
+                        )}
+                      </td>
+                      <td>
+                        {row.mediazionePayload.data_incontro && row.mediazionePayload.ora_incontro ? (
+                          <span className="text-sm">{formatDateIT(row.mediazionePayload.data_incontro)} · {row.mediazionePayload.ora_incontro}</span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td>{row.mediazionePayload.oggetto || "—"}</td>
+                      <td>{row.mediazionePayload.valore || "—"}</td>
+                      <td>{row.mediazionePayload.competenza || "—"}</td>
+                      <td>{formatDateIT(row.mediazionePayload.data_protocollo)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
 
       {parsedRows.length > 0 && !(actionData && "success" in actionData) && (
