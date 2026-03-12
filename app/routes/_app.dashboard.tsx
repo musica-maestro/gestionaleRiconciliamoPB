@@ -608,7 +608,7 @@ export default function Dashboard() {
                       <p className="font-medium text-amber-800">{m.mancato_accordo}</p>
                     </div>
                     <div className="rounded bg-orange-50 px-3 py-2">
-                      <span className="text-base-content/70">Improcedibile</span>
+                      <span className="text-base-content/70">Ritirata</span>
                       <p className="font-medium text-orange-800">{m.improcedibile}</p>
                     </div>
                     <div className="rounded bg-base-200 px-3 py-2">

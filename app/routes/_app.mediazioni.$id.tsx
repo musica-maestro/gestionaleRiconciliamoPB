@@ -664,7 +664,7 @@ const ESITO_OPTIONS = [
   "",
   "Accordo",
   "Mancato accordo",
-  "Improcedibile",
+  "Ritirata",
   "Chiusa d'ufficio",
   "Nessuna risposta",
 ];

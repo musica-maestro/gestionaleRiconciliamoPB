@@ -182,7 +182,7 @@ export default function NewMediazione() {
               <option value="">—</option>
               <option value="Accordo">Accordo</option>
               <option value="Mancato accordo">Mancato accordo</option>
-              <option value="Improcedibile">Improcedibile</option>
+              <option value="Ritirata">Ritirata</option>
               <option value="Chiusa d'ufficio">Chiusa d'ufficio</option>
               <option value="Nessuna risposta">Nessuna risposta</option>
             </select>
