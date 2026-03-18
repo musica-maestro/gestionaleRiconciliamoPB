@@ -17,15 +17,16 @@ export async function action({ request }: ActionFunctionArgs) {
   const rgm = String(formData.get("rgm") ?? "").trim();
   const oggetto = String(formData.get("oggetto") ?? "").trim();
   const valore = String(formData.get("valore") ?? "").trim();
+  const data_deposito = formData.get("data_deposito")
+    ? String(formData.get("data_deposito"))
+    : null;
   const data_protocollo = formData.get("data_protocollo")
     ? String(formData.get("data_protocollo"))
     : null;
   const data_avvio_entro = formData.get("data_avvio_entro")
     ? String(formData.get("data_avvio_entro"))
     : null;
-  const modalita_mediazione = String(
-    formData.get("modalita_mediazione") ?? ""
-  ).trim() || undefined;
+  const modalita_mediazione = String(formData.get("modalita_mediazione") ?? "").trim() || undefined;
   const motivazione_deposito = String(formData.get("motivazione_deposito") ?? "").trim() || undefined;
   const modalita_convocazione = String(formData.get("modalita_convocazione") ?? "").trim() || undefined;
   const esito_finale = String(formData.get("esito_finale") ?? "").trim() || undefined;
@@ -34,6 +35,7 @@ export async function action({ request }: ActionFunctionArgs) {
     rgm: rgm || undefined,
     oggetto: oggetto || undefined,
     valore: valore || undefined,
+    data_deposito: data_deposito || undefined,
     data_protocollo: data_protocollo || undefined,
     data_avvio_entro: data_avvio_entro || undefined,
     modalita_mediazione: modalita_mediazione || undefined,
@@ -55,6 +57,10 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 }
 
+const inputClass =
+  "mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 focus:ring-2 focus:ring-blue-500 text-sm";
+const labelClass = "block text-sm font-medium text-slate-700";
+
 export default function NewMediazione() {
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
@@ -68,133 +74,104 @@ export default function NewMediazione() {
         </Link>
       </div>
 
-      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm max-w-2xl">
-        <h1 className="text-xl font-semibold text-slate-800 mb-4">
-          Nuova mediazione
-        </h1>
+      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm max-w-4xl">
+        <h1 className="text-xl font-semibold text-slate-800 mb-5">Nuova mediazione</h1>
 
-        <Form method="post" className="space-y-4">
-          <div>
-            <label htmlFor="rgm" className="block text-sm font-medium text-slate-700">
-              RGM
-            </label>
-            <input
-              id="rgm"
-              name="rgm"
-              type="text"
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <div>
-            <label htmlFor="data_protocollo" className="block text-sm font-medium text-slate-700">
-              Data protocollo
-            </label>
-            <input
-              id="data_protocollo"
-              name="data_protocollo"
-              type="date"
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <div>
-            <label htmlFor="oggetto" className="block text-sm font-medium text-slate-700">
-              Oggetto
-            </label>
-            <input
-              id="oggetto"
-              name="oggetto"
-              type="text"
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <div>
-            <label htmlFor="valore" className="block text-sm font-medium text-slate-700">
-              Valore
-            </label>
-            <input
-              id="valore"
-              name="valore"
-              type="text"
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <div>
-            <label htmlFor="modalita_mediazione" className="block text-sm font-medium text-slate-700">
-              Modalità mediazione
-            </label>
-            <select
-              id="modalita_mediazione"
-              name="modalita_mediazione"
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="">—</option>
-              <option value="Telematica">Telematica</option>
-              <option value="Presenza">Presenza</option>
-              <option value="Da remoto">Da remoto</option>
-              <option value="Mista">Mista</option>
-            </select>
-          </div>
-          <div>
-            <label htmlFor="motivazione_deposito" className="block text-sm font-medium text-slate-700">
-              Motivazione deposito
-            </label>
-            <input
-              id="motivazione_deposito"
-              name="motivazione_deposito"
-              type="text"
-              placeholder="es. Quale condizione di procedibilità, Come richiesta volontaria"
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <div>
-            <label htmlFor="data_avvio_entro" className="block text-sm font-medium text-slate-700">
-              Data avvio entro
-            </label>
-            <input
-              id="data_avvio_entro"
-              name="data_avvio_entro"
-              type="date"
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 focus:ring-2 focus:ring-blue-500"
-              title="Se motivazione deposito è «Disposta dal giudice»"
-            />
-          </div>
-          <div>
-            <label htmlFor="modalita_convocazione" className="block text-sm font-medium text-slate-700">
-              Modalità convocazione
-            </label>
-            <input
-              id="modalita_convocazione"
-              name="modalita_convocazione"
-              type="text"
-              placeholder="es. Raccomandata alla parte (a carico del richiedente), PEC alla parte"
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <div>
-            <label htmlFor="esito_finale" className="block text-sm font-medium text-slate-700">
-              Esito finale
-            </label>
-            <select
-              id="esito_finale"
-              name="esito_finale"
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="">—</option>
-              <option value="Accordo">Accordo</option>
-              <option value="Mancato accordo">Mancato accordo</option>
-              <option value="Ritirata">Ritirata</option>
-              <option value="Chiusa d'ufficio">Chiusa d'ufficio</option>
-              <option value="Nessuna risposta">Nessuna risposta</option>
-            </select>
+        <Form method="post">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+
+            {/* Row 1: RGM | Oggetto */}
+            <div>
+              <label htmlFor="rgm" className={labelClass}>RGM</label>
+              <input id="rgm" name="rgm" type="text" className={inputClass} />
+            </div>
+            <div>
+              <label htmlFor="oggetto" className={labelClass}>Oggetto</label>
+              <input id="oggetto" name="oggetto" type="text" className={inputClass} />
+            </div>
+
+            {/* Row 2: Data deposito | Data protocollo */}
+            <div>
+              <label htmlFor="data_deposito" className={labelClass}>Data deposito</label>
+              <input id="data_deposito" name="data_deposito" type="date" className={inputClass} />
+            </div>
+            <div>
+              <label htmlFor="data_protocollo" className={labelClass}>Data protocollo</label>
+              <input id="data_protocollo" name="data_protocollo" type="date" className={inputClass} />
+            </div>
+
+            {/* Row 3: Valore | Modalità mediazione */}
+            <div>
+              <label htmlFor="valore" className={labelClass}>Valore</label>
+              <input id="valore" name="valore" type="text" className={inputClass} />
+            </div>
+            <div>
+              <label htmlFor="modalita_mediazione" className={labelClass}>Modalità mediazione</label>
+              <select id="modalita_mediazione" name="modalita_mediazione" className={inputClass}>
+                <option value="">—</option>
+                <option value="Telematica">Telematica</option>
+                <option value="Presenza">Presenza</option>
+                <option value="Da remoto">Da remoto</option>
+                <option value="Mista">Mista</option>
+              </select>
+            </div>
+
+            {/* Row 4: Motivazione deposito | Data avvio entro */}
+            <div>
+              <label htmlFor="motivazione_deposito" className={labelClass}>Motivazione deposito</label>
+              <input
+                id="motivazione_deposito"
+                name="motivazione_deposito"
+                type="text"
+                placeholder="es. Quale condizione di procedibilità"
+                className={inputClass}
+              />
+            </div>
+            <div>
+              <label htmlFor="data_avvio_entro" className={labelClass}>
+                Data avvio entro
+                <span className="ml-1 text-slate-400 font-normal text-xs">(se disposta dal giudice)</span>
+              </label>
+              <input
+                id="data_avvio_entro"
+                name="data_avvio_entro"
+                type="date"
+                className={inputClass}
+              />
+            </div>
+
+            {/* Row 5: Modalità convocazione | Esito finale */}
+            <div>
+              <label htmlFor="modalita_convocazione" className={labelClass}>Modalità convocazione</label>
+              <input
+                id="modalita_convocazione"
+                name="modalita_convocazione"
+                type="text"
+                placeholder="es. Raccomandata, PEC alla parte"
+                className={inputClass}
+              />
+            </div>
+            <div>
+              <label htmlFor="esito_finale" className={labelClass}>Esito finale</label>
+              <select id="esito_finale" name="esito_finale" className={inputClass}>
+                <option value="">—</option>
+                <option value="Accordo">Accordo</option>
+                <option value="Mancato accordo">Mancato accordo</option>
+                <option value="Ritirata">Ritirata</option>
+                <option value="Chiusa d'ufficio">Chiusa d&apos;ufficio</option>
+                <option value="Nessuna risposta">Nessuna risposta</option>
+              </select>
+            </div>
+
           </div>
 
           {actionData?.error && (
-            <p className="text-sm text-red-600" role="alert">
+            <p className="mt-4 text-sm text-red-600" role="alert">
               {actionData.error}
             </p>
           )}
 
-          <div className="flex gap-3 pt-2">
+          <div className="flex gap-3 pt-5 border-t border-slate-100 mt-5">
             <button
               type="submit"
               disabled={isSubmitting}

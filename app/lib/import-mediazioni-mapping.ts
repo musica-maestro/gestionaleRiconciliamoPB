@@ -123,6 +123,7 @@ export interface ImportRow {
     motivazione_deposito: string;
     modalita_convocazione: string;
     nota: string;
+    data_deposito: string | null;
     data_protocollo: string | null;
     mediatore: string;
     /** Link istanza (Richiesta di Mediazione) - transition phase */
@@ -166,7 +167,12 @@ export interface ImportRow {
 export function mapExcelRowsToImport(jsonRows: Record<string, unknown>[]): ImportRow[] {
   return jsonRows
     .map((row, i) => {
-      const dataDeposito = parseDateToISO(getStr(row, "Data deposito") || (row["Data deposito"] ?? ""));
+      const dataDeposito = parseDateToISO(
+        row["Data deposito"] ?? getStr(row, "Data deposito")
+      );
+      const dataProtocollo = parseDateToISO(
+        row["Data protocollo"] ?? getStr(row, "Data protocollo")
+      );
       const rgm = getStr(row, "RGM") || getStr(row, "Registro num.");
       const rawDataIncontro = row["Data incontro"] ?? getStr(row, "Data incontro") ?? "";
       const dataIncontro = parseDateToISO(rawDataIncontro);
@@ -184,7 +190,8 @@ export function mapExcelRowsToImport(jsonRows: Record<string, unknown>[]): Impor
           capitalize(getStr(row, "Motivo").trim()),
         modalita_convocazione: capitalize(getStr(row, "Modalità convocazione").trim()),
         nota: "",
-        data_protocollo: dataDeposito || null,
+        data_deposito: dataDeposito || null,
+        data_protocollo: dataProtocollo || null,
         mediatore: getStr(row, "Mediatore"),
         link_istanza: getStr(row, "Link Istanza"),
         link_cartella: getStr(row, "Link Cartella"),

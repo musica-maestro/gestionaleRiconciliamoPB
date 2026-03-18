@@ -101,6 +101,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     valore: String(m.valore ?? "—"),
     modalita_mediazione: String(m.modalita_mediazione ?? "—"),
     esito_finale: String(m.esito_finale ?? "—"),
+    data_deposito: m.data_deposito ? String(m.data_deposito) : null,
     data_protocollo: m.data_protocollo ? String(m.data_protocollo) : null,
     data_chiusura: m.data_chiusura ? String(m.data_chiusura) : null,
     mediatore_name: String(m.mediatore_name ?? "—"),
@@ -402,6 +403,9 @@ export default function MediazioniList() {
                   </div>
                   <FilterTextInput name="rgm" defaultValue={filters.rgm} placeholder="Cerca RGM" />
                 </th>
+                <th className={`${filterableTableThClass} min-w-[130px]`}>
+                  <div className={filterableTableHeaderLabelClass}>Data deposito</div>
+                </th>
                 <th className={`${filterableTableThClass} min-w-[200px]`}>
                   <div className={filterableTableHeaderLabelClass}>
                     <SortLink label="Data protocollo" field="data_protocollo" currentSort={sortField} currentOrder={order} searchParams={searchParams} />
@@ -474,7 +478,7 @@ export default function MediazioniList() {
             <tbody>
               {mediazioni.length === 0 ? (
                 <tr>
-                  <td colSpan={13} className="text-center text-base-content/70 py-12">
+                  <td colSpan={14} className="text-center text-base-content/70 py-12">
                     Nessuna mediazione trovata.
                   </td>
                 </tr>
@@ -483,6 +487,9 @@ export default function MediazioniList() {
                   <tr key={m.id} className="hover" style={idx % 2 === 1 ? zebraEven : undefined}>
                     <td className="py-2">
                       <span className="font-medium truncate block max-w-[90px]">{m.rgm}</span>
+                    </td>
+                    <td className="py-2 whitespace-nowrap">
+                      {m.data_deposito ? new Date(m.data_deposito).toLocaleDateString("it-IT") : "—"}
                     </td>
                     <td className="py-2 whitespace-nowrap">
                       {m.data_protocollo ? new Date(m.data_protocollo).toLocaleDateString("it-IT") : "—"}

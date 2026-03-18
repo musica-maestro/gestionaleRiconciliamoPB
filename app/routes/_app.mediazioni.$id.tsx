@@ -66,6 +66,9 @@ export async function action({ request, params }: ActionFunctionArgs) {
     const oggetto = String(formData.get("oggetto") ?? "").trim() || undefined;
     const valore = String(formData.get("valore") ?? "").trim() || undefined;
     const competenza = String(formData.get("competenza") ?? "").trim() || undefined;
+    const data_deposito = formData.get("data_deposito")
+      ? String(formData.get("data_deposito"))
+      : undefined;
     const data_protocollo = formData.get("data_protocollo")
       ? String(formData.get("data_protocollo"))
       : undefined;
@@ -86,6 +89,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
       oggetto,
       valore,
       competenza,
+      data_deposito: data_deposito || null,
       data_protocollo: data_protocollo || null,
       data_chiusura: data_chiusura || null,
       data_avvio_entro: data_avvio_entro || null,
@@ -614,6 +618,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     mediazione: {
       id: mediazione.id,
       rgm: mediazione.rgm ?? "",
+      data_deposito: mediazione.data_deposito ?? null,
       data_protocollo: mediazione.data_protocollo ?? null,
       oggetto: mediazione.oggetto ?? "",
       valore: mediazione.valore ?? "",
@@ -1716,6 +1721,10 @@ export default function MediazioneDetail() {
                 <dd className="text-slate-900">{mediazione.rgm || "—"}</dd>
               </div>
               <div>
+                <dt className="font-medium text-slate-500 mb-0.5">Data deposito</dt>
+                <dd className="text-slate-900">{formatDate(mediazione.data_deposito)}</dd>
+              </div>
+              <div>
                 <dt className="font-medium text-slate-500 mb-0.5">Data protocollo</dt>
                 <dd className="text-slate-900">{formatDate(mediazione.data_protocollo)}</dd>
               </div>
@@ -1778,6 +1787,17 @@ export default function MediazioneDetail() {
                     <input
                       name="rgm"
                       defaultValue={mediazione.rgm}
+                      className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
+                    />
+                  </dd>
+                </div>
+                <div>
+                  <dt className="font-medium text-slate-500 mb-0.5">Data deposito</dt>
+                  <dd>
+                    <input
+                      name="data_deposito"
+                      type="date"
+                      defaultValue={toInputDate(mediazione.data_deposito)}
                       className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
                     />
                   </dd>

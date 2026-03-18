@@ -179,6 +179,7 @@ export async function importRows(
         motivazione_deposito: row.mediazionePayload.motivazione_deposito || undefined,
         modalita_convocazione: row.mediazionePayload.modalita_convocazione || undefined,
         nota: row.mediazionePayload.nota || undefined,
+        data_deposito: row.mediazionePayload.data_deposito || undefined,
         data_protocollo: row.mediazionePayload.data_protocollo || undefined,
         mediatore: mediatoreId,
       };
