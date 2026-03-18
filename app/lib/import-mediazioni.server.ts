@@ -257,36 +257,82 @@ export async function importRows(
         }
       }
 
-      // Transition: link istanza and cartella as documenti (for both new and existing mediazioni)
+      // Documenti: upsert link istanza and cartella (find by mediazione+tipo, update or create)
       const linkIstanza = (row.mediazionePayload.link_istanza || "").trim();
       const linkCartella = (row.mediazionePayload.link_cartella || "").trim();
       if (tipoRichiesta && isUrlLike(linkIstanza)) {
-        await pb.collection("documenti").create({
-          mediazione: mediazioneId,
-          tipo: tipoRichiesta,
-          descrizione: "Richiesta di mediazione (import)",
-          link_legacy: linkIstanza,
-        });
+        const existingIstanzaDoc = await pb
+          .collection("documenti")
+          .getFullList({
+            filter: pb.filter("mediazione = {:m} && tipo = {:t}", { m: mediazioneId, t: tipoRichiesta }),
+            limit: 1,
+            fields: "id,link_legacy",
+          })
+          .catch(() => []);
+        if (existingIstanzaDoc.length > 0) {
+          const doc = existingIstanzaDoc[0] as { id: string; link_legacy?: string };
+          if (doc.link_legacy !== linkIstanza) {
+            await pb.collection("documenti").update(doc.id, { link_legacy: linkIstanza });
+          }
+        } else {
+          await pb.collection("documenti").create({
+            mediazione: mediazioneId,
+            tipo: tipoRichiesta,
+            descrizione: "Richiesta di mediazione (import)",
+            link_legacy: linkIstanza,
+          });
+        }
       }
       if (tipoCartella && isUrlLike(linkCartella)) {
-        await pb.collection("documenti").create({
-          mediazione: mediazioneId,
-          tipo: tipoCartella,
-          descrizione: "Cartella (import)",
-          link_legacy: linkCartella,
-        });
+        const existingCartellaDoc = await pb
+          .collection("documenti")
+          .getFullList({
+            filter: pb.filter("mediazione = {:m} && tipo = {:t}", { m: mediazioneId, t: tipoCartella }),
+            limit: 1,
+            fields: "id,link_legacy",
+          })
+          .catch(() => []);
+        if (existingCartellaDoc.length > 0) {
+          const doc = existingCartellaDoc[0] as { id: string; link_legacy?: string };
+          if (doc.link_legacy !== linkCartella) {
+            await pb.collection("documenti").update(doc.id, { link_legacy: linkCartella });
+          }
+        } else {
+          await pb.collection("documenti").create({
+            mediazione: mediazioneId,
+            tipo: tipoCartella,
+            descrizione: "Cartella (import)",
+            link_legacy: linkCartella,
+          });
+        }
       }
 
-      // Incontro: crea sempre il record in collection incontri (non solo in nota) se ci sono Data e Ora
+      // Incontro: upsert — find the first incontro for this mediazione; update data_programmazione
+      // if changed, create if none exists
       const dataIncontroRaw = (row.mediazionePayload.data_incontro ?? "").toString().trim();
       const oraIncontroRaw = (row.mediazionePayload.ora_incontro ?? "").toString().trim();
       const dataProg = buildDataProgrammazioneUTC(dataIncontroRaw, oraIncontroRaw);
       if (dataProg) {
-        await pb.collection("incontri").create({
-          mediazione: mediazioneId,
-          data_programmazione: dataProg,
-          report: "",
-        });
+        const existingIncontri = await pb
+          .collection("incontri")
+          .getFullList({
+            filter: pb.filter("mediazione = {:m}", { m: mediazioneId }),
+            limit: 1,
+            fields: "id,data_programmazione",
+          })
+          .catch(() => []);
+        if (existingIncontri.length > 0) {
+          const inc = existingIncontri[0] as { id: string; data_programmazione?: string };
+          if (inc.data_programmazione !== dataProg) {
+            await pb.collection("incontri").update(inc.id, { data_programmazione: dataProg });
+          }
+        } else {
+          await pb.collection("incontri").create({
+            mediazione: mediazioneId,
+            data_programmazione: dataProg,
+            report: "",
+          });
+        }
       }
 
       success++;

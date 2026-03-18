@@ -21,7 +21,7 @@ import { Eye, MoreVertical, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } 
 
 const ESITO_OPTIONS = ["Accordo", "Mancato accordo", "Ritirata", "Chiusa d'ufficio", "Nessuna risposta"].map((label) => ({ value: label, label }));
 const PER_PAGE_OPTIONS = [10, 25, 50, 100] as const;
-const SORT_FIELDS = ["rgm", "oggetto", "data_protocollo", "data_chiusura", "esito_finale", "modalita_mediazione", "competenza", "mediatore_name"] as const;
+const SORT_FIELDS = ["rgm", "oggetto", "data_deposito", "data_protocollo", "data_chiusura", "esito_finale", "modalita_mediazione", "competenza", "mediatore_name"] as const;
 const MAIN_COLOR = "#3aaeba";
 
 function stripHtml(html: string): string {
@@ -43,6 +43,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const esito = url.searchParams.get("esito")?.trim() ?? "";
   const data_da = url.searchParams.get("data_da")?.trim() ?? "";
   const data_a = url.searchParams.get("data_a")?.trim() ?? "";
+  const data_deposito_da = url.searchParams.get("data_deposito_da")?.trim() ?? "";
+  const data_deposito_a = url.searchParams.get("data_deposito_a")?.trim() ?? "";
   const data_chiusura_da = url.searchParams.get("data_chiusura_da")?.trim() ?? "";
   const data_chiusura_a = url.searchParams.get("data_chiusura_a")?.trim() ?? "";
   const modalita = url.searchParams.get("modalita")?.trim() ?? "";
@@ -70,6 +72,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (oggetto) filterParts.push(pb.filter("oggetto ~ {:oggetto}", { oggetto }));
   if (valore) filterParts.push(pb.filter("valore ~ {:valore}", { valore }));
   if (esito) filterParts.push(`esito_finale = "${esito}"`);
+  if (data_deposito_da) filterParts.push(`data_deposito >= "${data_deposito_da}"`);
+  if (data_deposito_a) filterParts.push(`data_deposito <= "${data_deposito_a}"`);
   if (data_da) filterParts.push(`data_protocollo >= "${data_da}"`);
   if (data_a) filterParts.push(`data_protocollo <= "${data_a}"`);
   if (data_chiusura_da) filterParts.push(`data_chiusura >= "${data_chiusura_da}"`);
@@ -123,6 +127,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       oggetto,
       valore,
       esito,
+      data_deposito_da,
+      data_deposito_a,
       data_da,
       data_a,
       data_chiusura_da,
@@ -216,6 +222,8 @@ function filtersRecordFromLoader(filters: {
   oggetto: string;
   valore: string;
   esito: string;
+  data_deposito_da: string;
+  data_deposito_a: string;
   data_da: string;
   data_a: string;
   data_chiusura_da: string;
@@ -233,6 +241,8 @@ function filtersRecordFromLoader(filters: {
     oggetto: filters.oggetto,
     valore: filters.valore,
     esito: filters.esito,
+    data_deposito_da: filters.data_deposito_da,
+    data_deposito_a: filters.data_deposito_a,
     data_da: filters.data_da,
     data_a: filters.data_a,
     data_chiusura_da: filters.data_chiusura_da,
@@ -403,8 +413,11 @@ export default function MediazioniList() {
                   </div>
                   <FilterTextInput name="rgm" defaultValue={filters.rgm} placeholder="Cerca RGM" />
                 </th>
-                <th className={`${filterableTableThClass} min-w-[130px]`}>
-                  <div className={filterableTableHeaderLabelClass}>Data deposito</div>
+                <th className={`${filterableTableThClass} min-w-[200px]`}>
+                  <div className={filterableTableHeaderLabelClass}>
+                    <SortLink label="Data deposito" field="data_deposito" currentSort={sortField} currentOrder={order} searchParams={searchParams} />
+                  </div>
+                  <FilterDateRange nameFrom="data_deposito_da" nameTo="data_deposito_a" valueFrom={filters.data_deposito_da} valueTo={filters.data_deposito_a} />
                 </th>
                 <th className={`${filterableTableThClass} min-w-[200px]`}>
                   <div className={filterableTableHeaderLabelClass}>
