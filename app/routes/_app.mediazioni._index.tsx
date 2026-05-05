@@ -306,6 +306,9 @@ export default function MediazioniList() {
               <Link to="/mediazioni/import" className="btn btn-ghost btn-sm">
                 Importa mediazioni
               </Link>
+              <Link to="/mediazioni/chiudi" className="btn btn-ghost btn-sm">
+                Chiudi mediazioni
+              </Link>
               <span className="hidden sm:inline w-px h-6 bg-base-300 rounded" aria-hidden />
               <Link to="/mediazioni/new" className="btn btn-primary btn-sm">
                 Nuova mediazione

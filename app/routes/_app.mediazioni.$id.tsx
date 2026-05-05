@@ -1,4 +1,11 @@
-import { Form, Link, useLoaderData, useSearchParams } from "@remix-run/react";
+import {
+  Form,
+  Link,
+  useActionData,
+  useLoaderData,
+  useNavigation,
+  useSearchParams,
+} from "@remix-run/react";
 import { useState, useEffect } from "react";
 import { Pencil, Plus, Trash2, UserPlus, X } from "lucide-react";
 import { json, redirect, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
@@ -44,6 +51,18 @@ function canAccessMediazione(
   return false;
 }
 
+function pocketBaseErrorMessage(error: unknown): string {
+  if (error && typeof error === "object" && "data" in error) {
+    const data = (error as { data?: unknown }).data;
+    if (data && typeof data === "object" && data !== null) {
+      const msg = (data as Record<string, unknown>).message;
+      if (typeof msg === "string" && msg.trim()) return msg;
+    }
+  }
+  if (error instanceof Error && error.message.trim()) return error.message;
+  return "Si è verificato un errore durante il salvataggio.";
+}
+
 export async function action({ request, params }: ActionFunctionArgs) {
   const user = await requireUser(request);
   const { pb } = await createPB(request);
@@ -66,9 +85,6 @@ export async function action({ request, params }: ActionFunctionArgs) {
     const oggetto = String(formData.get("oggetto") ?? "").trim() || undefined;
     const valore = String(formData.get("valore") ?? "").trim() || undefined;
     const competenza = String(formData.get("competenza") ?? "").trim() || undefined;
-    const data_deposito = formData.get("data_deposito")
-      ? String(formData.get("data_deposito"))
-      : undefined;
     const data_protocollo = formData.get("data_protocollo")
       ? String(formData.get("data_protocollo"))
       : undefined;
@@ -83,13 +99,13 @@ export async function action({ request, params }: ActionFunctionArgs) {
     const modalita_convocazione = String(formData.get("modalita_convocazione") ?? "").trim() || undefined;
     const esito_finale = String(formData.get("esito_finale") ?? "").trim() || undefined;
     const nota = String(formData.get("nota") ?? "").trim() || undefined;
+    const mediatore = String(formData.get("mediatore") ?? "").trim();
 
-    await pb.collection("mediazioni").update(id, {
+    const updateData: Record<string, unknown> = {
       rgm,
       oggetto,
       valore,
       competenza,
-      data_deposito: data_deposito || null,
       data_protocollo: data_protocollo || null,
       data_chiusura: data_chiusura || null,
       data_avvio_entro: data_avvio_entro || null,
@@ -98,7 +114,26 @@ export async function action({ request, params }: ActionFunctionArgs) {
       modalita_convocazione,
       esito_finale,
       nota: nota || undefined,
-    });
+    };
+
+    // Only admins can reassign the mediatore, regardless of submitted form fields.
+    if (role === "admin" && mediatore) {
+      updateData.mediatore = mediatore;
+    }
+
+    try {
+      await pb.collection("mediazioni").update(id, updateData);
+      return json({ toast: "saved" as const, mediazioneId: id });
+    } catch (e) {
+      return json(
+        {
+          toast: "error" as const,
+          mediazioneId: id,
+          message: pocketBaseErrorMessage(e),
+        },
+        { status: 422 }
+      );
+    }
   } else if (intent === "add_partecipazione") {
     const soggetto_id = formData.get("soggetto_id");
     const istante_o_chiamato = String(formData.get("istante_o_chiamato") ?? "").trim();
@@ -309,30 +344,6 @@ export async function action({ request, params }: ActionFunctionArgs) {
 
     await pb.collection("documenti").create(docForm);
     return redirect(`/mediazioni/${id}?tab=documenti`);
-  } else if (intent === "delete_documento") {
-    const documento_id = String(formData.get("documento_id") ?? "");
-    if (!documento_id) return redirect(`/mediazioni/${id}?tab=documenti`);
-    await pb.collection("documenti").delete(documento_id);
-    return redirect(`/mediazioni/${id}?tab=documenti`);
-  } else if (intent === "update_documento") {
-    const documento_id = String(formData.get("documento_id") ?? "");
-    if (!documento_id) return redirect(`/mediazioni/${id}?tab=documenti`);
-    const tipo = String(formData.get("tipo") ?? "").trim();
-    const descrizione = String(formData.get("descrizione") ?? "").trim();
-    const file = formData.get("file");
-    if (file && file instanceof File && file.size > 0) {
-      const docForm = new FormData();
-      docForm.append("tipo", tipo || "");
-      docForm.append("descrizione", descrizione);
-      docForm.append("file", file);
-      await pb.collection("documenti").update(documento_id, docForm);
-    } else {
-      await pb.collection("documenti").update(documento_id, {
-        tipo: tipo || "",
-        descrizione: descrizione || undefined,
-      });
-    }
-    return redirect(`/mediazioni/${id}?tab=documenti`);
   } else if (intent === "add_fattura") {
     const numero_fattura = String(formData.get("numero_fattura") ?? "").trim() || undefined;
     const data_emissione_fattura = formData.get("data_emissione_fattura")
@@ -384,13 +395,14 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
   const mediatoreId =
     typeof mediazione.mediatore === "string"
       ? mediazione.mediatore
-      : (mediazione.mediatore as Record<string, string> | null) ?? null;
+      : null;
   if (!canAccessMediazione(role, user.id, mediatoreId)) {
     throw new Response("Forbidden", { status: 403 });
   }
 
   const canDelete = role === "admin" || role === "manager";
   const showFatture = canDelete;
+  const canEditMediatore = role === "admin";
 
   async function safeGetFullList<T>(fn: () => Promise<T[]>): Promise<T[]> {
     try {
@@ -415,6 +427,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     motivazioneDepositoResp,
     modalitaConvocazioneResp,
     materiaResp,
+    utentiResp,
   ] = await Promise.all([
     safeGetFullList(() =>
       pb.collection("partecipazioni").getFullList({ filter: `mediazione = "${id}"` })
@@ -434,7 +447,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       pb.collection("avvocati").getFullList({ sort: "cognome,nome" })
     ),
     safeGetFullList(() =>
-      pb.collection("documenti").getFullList({ filter: `mediazione = "${id}"`, expand: "tipo" })
+      pb.collection("documenti").getFullList({ filter: `mediazione = "${id}"` })
     ),
     safeGetFullList(() =>
       pb.collection("documenti_tipi").getFullList({ filter: "attivo = true", sort: "nome" })
@@ -457,15 +470,12 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     safeGetFullList(() =>
       pb.collection("materia_opzioni").getFullList({ filter: "attivo = true", sort: "nome" })
     ),
+    canEditMediatore
+      ? safeGetFullList(() =>
+          pb.collection("users").getFullList({ sort: "name,email", fields: "id,name,email" })
+        )
+      : Promise.resolve([]),
   ]);
-
-  // Token for protected file URLs (required when documenti.file is protected)
-  let fileToken: string | null = null;
-  try {
-    if (pb.authStore.token) fileToken = await pb.files.getToken();
-  } catch {
-    // ignore
-  }
 
   let convocazioniList: Array<{ id: string; partecipazione: string }> = [];
   const partecIds = partecipazioniResp.map((p: { id: string }) => p.id);
@@ -582,24 +592,15 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     tessera: (a.numero_tessera_foro as string) || undefined,
   }));
 
-  const documenti = (documentiResp as Record<string, unknown>[]).map((d) => {
-    const expandTipo = d.expand?.tipo as { nome?: string } | undefined;
-    const tipoNome = expandTipo?.nome ?? "";
-    const tipoId = (d.tipo as string) ?? "";
-    const fileUrl = d.file
-      ? pb.files.getUrl(d as never, d.file as string, fileToken ? { token: fileToken } : undefined)
-      : "";
-    const linkLegacy = (d.link_legacy as string) ?? "";
-    return {
-      id: d.id as string,
-      tipo: tipoNome,
-      tipo_id: tipoId,
-      descrizione: (d.descrizione as string) ?? "",
-      file: (d.file as string) ?? "",
-      file_url: fileUrl,
-      link_legacy: linkLegacy,
-    };
-  });
+  const documenti = (documentiResp as Record<string, unknown>[]).map((d) => ({
+    id: d.id as string,
+    tipo: (d.tipo as string) ?? "",
+    descrizione: (d.descrizione as string) ?? "",
+    file: (d.file as string) ?? "",
+    file_url: d.file
+      ? pb.files.getUrl(d as never, d.file as string)
+      : "",
+  }));
 
   const documentiTipi = (documentiTipiResp as Record<string, unknown>[]).map((t) => ({
     id: t.id as string,
@@ -612,13 +613,22 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
   const motivazioneDepositoOpzioni = (motivazioneDepositoResp as Record<string, unknown>[]).map((r) => (r.nome as string) ?? "");
   const modalitaConvocazioneOpzioni = (modalitaConvocazioneResp as Record<string, unknown>[]).map((r) => (r.nome as string) ?? "");
   const materiaOpzioni = (materiaResp as Record<string, unknown>[]).map((r) => (r.nome as string) ?? "");
+  const utenti = (utentiResp as Record<string, unknown>[]).map((u) => {
+    const nome = ((u.name as string) ?? "").trim();
+    const email = ((u.email as string) ?? "").trim();
+    return {
+      id: u.id as string,
+      display: nome || email || "Utente senza nome",
+      email: email || undefined,
+    };
+  });
 
-  const mediatoreExpanded = mediazione.expand?.mediatore as Record<string, string> | undefined;
+  const mediazioneExpand = mediazione.expand as Record<string, unknown> | undefined;
+  const mediatoreExpanded = mediazioneExpand?.mediatore as Record<string, string> | undefined;
   return json({
     mediazione: {
       id: mediazione.id,
       rgm: mediazione.rgm ?? "",
-      data_deposito: mediazione.data_deposito ?? null,
       data_protocollo: mediazione.data_protocollo ?? null,
       oggetto: mediazione.oggetto ?? "",
       valore: mediazione.valore ?? "",
@@ -630,6 +640,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       data_chiusura: mediazione.data_chiusura ?? null,
       data_avvio_entro: mediazione.data_avvio_entro ?? null,
       nota: mediazione.nota ?? "",
+      mediatore_id: mediatoreId ?? "",
       mediatore_name: mediatoreExpanded?.name ?? "—",
     },
     partecipazioni,
@@ -647,6 +658,8 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     soggetti,
     avvocati,
     canDelete,
+    canEditMediatore,
+    utenti,
   });
 }
 
@@ -667,11 +680,11 @@ export const meta: MetaFunction<typeof loader> = ({ data }) => {
 
 const ESITO_OPTIONS = [
   "",
+  "In corso",
   "Accordo",
   "Mancato accordo",
-  "Ritirata",
+  "Improcedibile",
   "Chiusa d'ufficio",
-  "Nessuna risposta",
 ];
 
 const TABS = [
@@ -681,6 +694,10 @@ const TABS = [
   { id: "documenti", label: "Documenti" },
   { id: "fatture", label: "Fatture" },
 ] as const;
+
+type MediazioneUpdateActionData =
+  | { toast: "saved"; mediazioneId: string }
+  | { toast: "error"; mediazioneId: string; message: string };
 
 // ─── Parte Card ───────────────────────────────────────────────────────────────
 
@@ -1404,7 +1421,7 @@ function AddDocumentoDialog({
             <select name="tipo" className={EDIT_INPUT} defaultValue="">
               <option value="">— Seleziona tipo —</option>
               {documentiTipi.map((t) => (
-                <option key={t.id} value={t.id}>{t.nome}</option>
+                <option key={t.id} value={t.nome}>{t.nome}</option>
               ))}
             </select>
           </div>
@@ -1427,87 +1444,6 @@ function AddDocumentoDialog({
             </button>
             <button type="submit" className="flex-1 rounded-lg bg-[#3aaeba] px-3 py-2 text-sm font-semibold text-white hover:bg-[#349aa5] transition-colors">
               Salva documento
-            </button>
-          </div>
-        </Form>
-      </div>
-    </div>
-  );
-}
-
-// ─── Edit Documento Dialog ─────────────────────────────────────────────────────
-
-function EditDocumentoDialog({
-  isOpen,
-  onClose,
-  documento,
-  documentiTipi,
-}: {
-  isOpen: boolean;
-  onClose: () => void;
-  documento: { id: string; tipo: string; tipo_id: string; descrizione: string; file_url: string; link_legacy: string };
-  documentiTipi: Array<{ id: string; nome: string }>;
-}) {
-  useEffect(() => {
-    if (!isOpen) return;
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [isOpen, onClose]);
-
-  if (!isOpen) return null;
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div className="w-full max-w-lg bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col">
-        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5">
-          <h2 className="text-base font-semibold text-slate-800">Modifica documento</h2>
-          <button type="button" onClick={onClose} className="rounded-md p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <Form method="post" encType="multipart/form-data" onSubmit={onClose} className="px-5 py-4 space-y-4">
-          <input type="hidden" name="_action" value="update_documento" />
-          <input type="hidden" name="documento_id" value={documento.id} />
-          <div>
-            <label className={EDIT_LABEL}>Tipo</label>
-            <select name="tipo" className={EDIT_INPUT} defaultValue={documento.tipo_id}>
-              <option value="">— Seleziona tipo —</option>
-              {documentiTipi.map((t) => (
-                <option key={t.id} value={t.id}>{t.nome}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className={EDIT_LABEL}>File (lascia vuoto per non cambiare)</label>
-            <input
-              name="file"
-              type="file"
-              className="block w-full text-sm text-slate-700 file:mr-2 file:rounded file:border-0 file:bg-slate-200 file:px-2 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-300"
-            />
-            {documento.file_url ? (
-              <a href={documento.file_url} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs text-[#3aaeba] hover:underline">
-                Scarica file attuale
-              </a>
-            ) : documento.link_legacy ? (
-              <a href={documento.link_legacy} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs text-[#3aaeba] hover:underline">
-                Apri link attuale
-              </a>
-            ) : null}
-          </div>
-          <div>
-            <label className={EDIT_LABEL}>Descrizione</label>
-            <textarea name="descrizione" rows={2} className={EDIT_INPUT} placeholder="Note o descrizione del documento" defaultValue={documento.descrizione} />
-          </div>
-          <div className="pt-1 flex gap-2.5">
-            <button type="button" onClick={onClose} className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors">
-              Annulla
-            </button>
-            <button type="submit" className="flex-1 rounded-lg bg-[#3aaeba] px-3 py-2 text-sm font-semibold text-white hover:bg-[#349aa5] transition-colors">
-              Salva modifiche
             </button>
           </div>
         </Form>
@@ -1598,7 +1534,6 @@ type DialogMode =
   | { type: "editIncontro"; incontro: Incontro }
   | { type: "addConvocazione" }
   | { type: "addDocumento" }
-  | { type: "editDocumento"; documento: { id: string; tipo: string; tipo_id: string; descrizione: string; file_url: string; link_legacy: string } }
   | { type: "addFattura" }
   | null;
 
@@ -1620,12 +1555,55 @@ export default function MediazioneDetail() {
     soggetti,
     avvocati,
     canDelete,
+    canEditMediatore,
+    utenti,
   } = useLoaderData<typeof loader>();
+  const actionData = useActionData<MediazioneUpdateActionData>();
+  const navigation = useNavigation();
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = (searchParams.get("tab") as (typeof TABS)[number]["id"]) || "parti";
   const [editMode, setEditMode] = useState(false);
   const [editingPartecipazioneId, setEditingPartecipazioneId] = useState<string | null>(null);
   const [dialogMode, setDialogMode] = useState<DialogMode>(null);
+  const [saveToast, setSaveToast] = useState<{ kind: "saved" | "error"; detail?: string } | null>(null);
+  const [saveToastVisible, setSaveToastVisible] = useState(false);
+  const [saveToastLeaving, setSaveToastLeaving] = useState(false);
+
+  const isSavingMediazione =
+    navigation.state === "submitting" && navigation.formData?.get("_action") === "update";
+
+  useEffect(() => {
+    if (!actionData?.toast || actionData.mediazioneId !== mediazione.id) return;
+    if (actionData.toast === "saved") {
+      setEditMode(false);
+      setSaveToast({ kind: "saved" });
+      return;
+    }
+    if (actionData.toast === "error") {
+      setSaveToast({ kind: "error", detail: actionData.message });
+    }
+  }, [actionData, mediazione.id]);
+
+  useEffect(() => {
+    if (!saveToast) {
+      setSaveToastVisible(false);
+      setSaveToastLeaving(false);
+      return;
+    }
+    setSaveToastVisible(false);
+    const enter = window.setTimeout(() => setSaveToastVisible(true), 20);
+    const fade = window.setTimeout(() => setSaveToastLeaving(true), 5000);
+    const done = window.setTimeout(() => {
+      setSaveToastVisible(false);
+      setSaveToastLeaving(false);
+      setSaveToast(null);
+    }, 5800);
+    return () => {
+      window.clearTimeout(enter);
+      window.clearTimeout(fade);
+      window.clearTimeout(done);
+    };
+  }, [saveToast]);
 
   const editingPartecipazione =
     partecipazioni.find((p) => p.id === editingPartecipazioneId) ?? null;
@@ -1660,6 +1638,38 @@ export default function MediazioneDetail() {
 
   return (
     <div className="space-y-4 lg:space-y-6">
+      {saveToast && (
+        <div
+          className={`fixed top-4 right-4 z-[200] w-[24rem] max-w-[calc(100vw-2rem)] transition-all duration-700 ease-in-out ${
+            saveToastLeaving
+              ? "translate-x-12 opacity-0"
+              : saveToastVisible
+                ? "translate-x-0 opacity-100"
+                : "translate-x-6 opacity-0"
+          }`}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          <div
+            className={`rounded-xl border px-5 py-4 shadow-xl text-base ${
+              saveToast.kind === "saved"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                : "border-red-200 bg-red-50 text-red-900"
+            }`}
+          >
+            <p className="font-semibold">
+              {saveToast.kind === "saved" ? "Modifiche salvate" : "Salvataggio non riuscito"}
+            </p>
+            <p className="mt-1 opacity-90">
+              {saveToast.kind === "saved"
+                ? "I dati della mediazione sono stati aggiornati."
+                : saveToast.detail || "Non è stato possibile salvare. Riprova."}
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Link
           to="/mediazioni"
@@ -1719,10 +1729,6 @@ export default function MediazioneDetail() {
               <div>
                 <dt className="font-medium text-slate-500 mb-0.5">RGM</dt>
                 <dd className="text-slate-900">{mediazione.rgm || "—"}</dd>
-              </div>
-              <div>
-                <dt className="font-medium text-slate-500 mb-0.5">Data deposito</dt>
-                <dd className="text-slate-900">{formatDate(mediazione.data_deposito)}</dd>
               </div>
               <div>
                 <dt className="font-medium text-slate-500 mb-0.5">Data protocollo</dt>
@@ -1792,17 +1798,6 @@ export default function MediazioneDetail() {
                   </dd>
                 </div>
                 <div>
-                  <dt className="font-medium text-slate-500 mb-0.5">Data deposito</dt>
-                  <dd>
-                    <input
-                      name="data_deposito"
-                      type="date"
-                      defaultValue={toInputDate(mediazione.data_deposito)}
-                      className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
-                    />
-                  </dd>
-                </div>
-                <div>
                   <dt className="font-medium text-slate-500 mb-0.5">Data protocollo</dt>
                   <dd>
                     <input
@@ -1815,7 +1810,29 @@ export default function MediazioneDetail() {
                 </div>
                 <div>
                   <dt className="font-medium text-slate-500 mb-0.5">Mediatore</dt>
-                  <dd className="mt-0.5 text-slate-900 text-sm">{mediazione.mediatore_name}</dd>
+                  <dd>
+                    {canEditMediatore ? (
+                      <div>
+                        <select
+                          name="mediatore"
+                          defaultValue={mediazione.mediatore_id || ""}
+                          className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900 bg-white"
+                        >
+                          <option value="">Seleziona mediatore</option>
+                          {utenti.map((u) => (
+                            <option key={u.id} value={u.id}>
+                              {u.display}{u.email ? ` (${u.email})` : ""}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          Il mediatore viene aggiornato solo dopo «Salva modifiche».
+                        </p>
+                      </div>
+                    ) : (
+                      <span className="mt-0.5 text-slate-900 text-sm">{mediazione.mediatore_name}</span>
+                    )}
+                  </dd>
                 </div>
                 <div>
                   <dt className="font-medium text-slate-500 mb-0.5">Esito</dt>
@@ -1955,14 +1972,16 @@ export default function MediazioneDetail() {
               <div className="pt-1 flex flex-wrap gap-2">
                 <button
                   type="submit"
-                  className="rounded-lg bg-[#3aaeba] px-3 py-1.5 text-xs sm:text-sm font-medium text-white hover:bg-[#349aa5]"
+                  disabled={isSavingMediazione}
+                  className="rounded-lg bg-[#3aaeba] px-3 py-1.5 text-xs sm:text-sm font-medium text-white hover:bg-[#349aa5] disabled:opacity-60 disabled:pointer-events-none"
                 >
-                  Salva modifiche
+                  {isSavingMediazione ? "Salvataggio…" : "Salva modifiche"}
                 </button>
                 <button
                   type="button"
+                  disabled={isSavingMediazione}
                   onClick={() => setEditMode(false)}
-                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs sm:text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs sm:text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                 >
                   Annulla
                 </button>
@@ -2258,8 +2277,8 @@ export default function MediazioneDetail() {
                         <p className="text-slate-600 text-xs sm:text-sm line-clamp-2">{d.descrizione}</p>
                       )}
                     </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      {d.file_url ? (
+                    <div className="flex items-center gap-2 shrink-0">
+                      {d.file_url && (
                         <a
                           href={d.file_url}
                           className="rounded border border-slate-300 px-2.5 py-1 text-[11px] sm:text-xs text-slate-700 hover:bg-slate-50"
@@ -2268,36 +2287,7 @@ export default function MediazioneDetail() {
                         >
                           Scarica
                         </a>
-                      ) : d.link_legacy ? (
-                        <a
-                          href={d.link_legacy}
-                          className="rounded border border-slate-300 px-2.5 py-1 text-[11px] sm:text-xs text-slate-700 hover:bg-slate-50"
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Apri link
-                        </a>
-                      ) : null}
-                      <button
-                        type="button"
-                        onClick={() => setDialogMode({ type: "editDocumento", documento: d })}
-                        className="rounded p-1 text-slate-300 hover:text-[#3aaeba] hover:bg-[#3aaeba]/10 transition-colors"
-                        title="Modifica documento"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </button>
-                      <Form method="post">
-                        <input type="hidden" name="_action" value="delete_documento" />
-                        <input type="hidden" name="documento_id" value={d.id} />
-                        <button
-                          type="submit"
-                          onClick={(e) => { if (!confirm("Eliminare questo documento?")) e.preventDefault(); }}
-                          className="rounded p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors"
-                          title="Elimina documento"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </Form>
+                      )}
                     </div>
                   </li>
                 ))}
@@ -2517,14 +2507,6 @@ export default function MediazioneDetail() {
       <AddDocumentoDialog
         isOpen={dialogMode?.type === "addDocumento"}
         onClose={closeDialog}
-        documentiTipi={documentiTipi}
-      />
-
-      {/* ── Edit Documento dialog ── */}
-      <EditDocumentoDialog
-        isOpen={dialogMode?.type === "editDocumento"}
-        onClose={closeDialog}
-        documento={dialogMode?.type === "editDocumento" ? dialogMode.documento : { id: "", tipo: "", tipo_id: "", descrizione: "", file_url: "", link_legacy: "" }}
         documentiTipi={documentiTipi}
       />
 
