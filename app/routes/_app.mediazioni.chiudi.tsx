@@ -5,7 +5,7 @@ import * as XLSX from "xlsx";
 import { Download, FileSpreadsheet, Loader2, Upload } from "lucide-react";
 import { createPB } from "~/lib/pocketbase.server";
 import { requireUserAndRole } from "~/lib/auth.server";
-import { ESITO_FINALE_VALUES, normalizeEsitoFinale } from "~/lib/esito-finale";
+import { normalizeEsitoFinale } from "~/lib/esito-finale";
 
 type CloseRow = {
   index: number;
@@ -94,7 +94,7 @@ async function validateRows(
   const validRows: ValidatedRow[] = [];
   const seenRgm = new Set<string>();
 
-  for (const row of rows) {
+  for (let row of rows) {
     if (!row.rgm) {
       issues.push({ index: row.index, rgm: "", error: "RGM mancante" });
       continue;
@@ -130,24 +130,29 @@ async function validateRows(
     }
 
     const mediazioneId = String((found[0] as { id: string }).id);
+    const dbEsito = String((found[0] as { esito_finale?: unknown }).esito_finale ?? "").trim();
 
-    const missingFields: ("esito_finale" | "data_chiusura")[] = [];
-    if (!row.esito_finale) missingFields.push("esito_finale");
-    if (!row.data_chiusura) missingFields.push("data_chiusura");
+    if (!row.esito_finale && dbEsito) {
+      row = { ...row, esito_finale: dbEsito };
+    }
 
-    if (missingFields.length > 0) {
-      const label =
-        missingFields.length === 2
-          ? "Esito finale e data chiusura mancanti"
-          : missingFields[0] === "esito_finale"
-          ? "Esito finale mancante"
-          : "Data chiusura mancante o non valida";
+    if (!row.esito_finale) {
       issues.push({
         index: row.index,
         rgm: row.rgm,
-        error: label,
+        error: row.data_chiusura ? "Esito finale mancante" : "Esito finale e data chiusura mancanti",
+        mediazioneId,
+      });
+      continue;
+    }
+
+    if (!row.data_chiusura) {
+      issues.push({
+        index: row.index,
+        rgm: row.rgm,
+        error: "Data chiusura mancante o non valida",
         completable: true,
-        missingFields,
+        missingFields: ["data_chiusura"],
         mediazioneId,
       });
       continue;
@@ -464,43 +469,20 @@ export default function ChiudiMediazioniFromExcel() {
                       <tbody>
                         {completableIssues.map((issue) => {
                           const row = parsedRows.find((r) => r.index === issue.index);
-                          const needsEsito = issue.missingFields?.includes("esito_finale");
-                          const needsData = issue.missingFields?.includes("data_chiusura");
                           return (
                             <tr key={`completable-${issue.index}`}>
                               <td>{issue.index}</td>
                               <td>{issue.rgm}</td>
+                              <td>{row?.esito_finale || "—"}</td>
                               <td>
-                                {needsEsito ? (
-                                  <select
-                                    value={row?.esito_finale ?? ""}
-                                    onChange={(e) =>
-                                      updateRowField(issue.index, "esito_finale", e.target.value)
-                                    }
-                                    className="select select-sm select-bordered w-full max-w-[180px]"
-                                  >
-                                    <option value="">— seleziona —</option>
-                                    {ESITO_FINALE_VALUES.map((v) => (
-                                      <option key={v} value={v}>{v}</option>
-                                    ))}
-                                  </select>
-                                ) : (
-                                  <span>{row?.esito_finale || "—"}</span>
-                                )}
-                              </td>
-                              <td>
-                                {needsData ? (
-                                  <input
-                                    type="date"
-                                    value={row?.data_chiusura ?? ""}
-                                    onChange={(e) =>
-                                      updateRowField(issue.index, "data_chiusura", e.target.value)
-                                    }
-                                    className="input input-sm input-bordered w-full max-w-[150px]"
-                                  />
-                                ) : (
-                                  <span>{row?.data_chiusura || "—"}</span>
-                                )}
+                                <input
+                                  type="date"
+                                  value={row?.data_chiusura ?? ""}
+                                  onChange={(e) =>
+                                    updateRowField(issue.index, "data_chiusura", e.target.value)
+                                  }
+                                  className="input input-sm input-bordered w-full max-w-[150px]"
+                                />
                               </td>
                             </tr>
                           );
