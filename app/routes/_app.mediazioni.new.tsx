@@ -2,6 +2,7 @@ import { Form, Link, useActionData, useNavigation } from "@remix-run/react";
 import { json, redirect, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
 import { requireUserAndRole } from "~/lib/auth.server";
 import { createPB } from "~/lib/pocketbase.server";
+import { ESITO_FINALE_VALUES, normalizeEsitoFinale } from "~/lib/esito-finale";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   await requireUserAndRole(request, "admin", "manager");
@@ -29,7 +30,8 @@ export async function action({ request }: ActionFunctionArgs) {
   const modalita_mediazione = String(formData.get("modalita_mediazione") ?? "").trim() || undefined;
   const motivazione_deposito = String(formData.get("motivazione_deposito") ?? "").trim() || undefined;
   const modalita_convocazione = String(formData.get("modalita_convocazione") ?? "").trim() || undefined;
-  const esito_finale = String(formData.get("esito_finale") ?? "").trim() || undefined;
+  const esitoRaw = String(formData.get("esito_finale") ?? "").trim();
+  const esito_finale = esitoRaw ? normalizeEsitoFinale(esitoRaw) : undefined;
 
   const body: Record<string, unknown> = {
     rgm: rgm || undefined,
@@ -155,11 +157,11 @@ export default function NewMediazione() {
               <label htmlFor="esito_finale" className={labelClass}>Esito finale</label>
               <select id="esito_finale" name="esito_finale" className={inputClass}>
                 <option value="">—</option>
-                <option value="Accordo">Accordo</option>
-                <option value="Mancato accordo">Mancato accordo</option>
-                <option value="Ritirata">Ritirata</option>
-                <option value="Chiusa d'ufficio">Chiusa d&apos;ufficio</option>
-                <option value="Nessuna risposta">Nessuna risposta</option>
+                {ESITO_FINALE_VALUES.map((esito) => (
+                  <option key={esito} value={esito}>
+                    {esito}
+                  </option>
+                ))}
               </select>
             </div>
 

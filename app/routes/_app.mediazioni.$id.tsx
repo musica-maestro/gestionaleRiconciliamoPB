@@ -14,6 +14,7 @@ import { getCurrentRole, requireUser } from "~/lib/auth.server";
 import { createPB } from "~/lib/pocketbase.server";
 import { AddParteDialog } from "~/components/add-parte-dialog";
 import { AddAvvocatoDialog } from "~/components/add-avvocato-dialog";
+import { ESITO_FINALE_FORM_OPTIONS, normalizeEsitoFinale } from "~/lib/esito-finale";
 
 // Converts a "YYYY-MM-DDTHH:MM" string (interpreted as Europe/Rome local time) to a
 // PocketBase-compatible UTC string "YYYY-MM-DD HH:MM:SS.000Z".
@@ -97,7 +98,8 @@ export async function action({ request, params }: ActionFunctionArgs) {
     const modalita_mediazione = String(formData.get("modalita_mediazione") ?? "").trim() || undefined;
     const motivazione_deposito = String(formData.get("motivazione_deposito") ?? "").trim() || undefined;
     const modalita_convocazione = String(formData.get("modalita_convocazione") ?? "").trim() || undefined;
-    const esito_finale = String(formData.get("esito_finale") ?? "").trim() || undefined;
+    const esitoRaw = String(formData.get("esito_finale") ?? "").trim();
+    const esito_finale = esitoRaw ? normalizeEsitoFinale(esitoRaw) : undefined;
     const nota = String(formData.get("nota") ?? "").trim() || undefined;
     const mediatore = String(formData.get("mediatore") ?? "").trim();
 
@@ -677,16 +679,6 @@ export const meta: MetaFunction<typeof loader> = ({ data }) => {
   const parti = [istanti || "—", chiamati || "—"].join(" / ");
   return [{ title: `${rgm} - ${parti}` }];
 };
-
-const ESITO_OPTIONS = [
-  "",
-  "In corso",
-  "Accordo",
-  "Mancato accordo",
-  "Improcedibile",
-  "Nessuna risposta",
-  "Chiusa d'ufficio",
-];
 
 const TABS = [
   { id: "parti", label: "Parti" },
@@ -1843,7 +1835,7 @@ export default function MediazioneDetail() {
                       defaultValue={mediazione.esito_finale || ""}
                       className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900 bg-white"
                     >
-                      {ESITO_OPTIONS.map((o) => (
+                      {ESITO_FINALE_FORM_OPTIONS.map((o) => (
                         <option key={o || "empty"} value={o}>{o || "—"}</option>
                       ))}
                     </select>

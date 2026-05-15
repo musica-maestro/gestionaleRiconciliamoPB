@@ -17,9 +17,8 @@ import {
   filterableTableHeaderLabelClass,
 } from "~/components/data-table";
 import { ExportMediazioniDialog } from "~/components/export-mediazioni-dialog";
+import { ESITO_FINALE_FILTER_OPTIONS } from "~/lib/esito-finale";
 import { Eye, MoreVertical, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from "lucide-react";
-
-const ESITO_OPTIONS = ["Accordo", "Mancato accordo", "Ritirata", "Chiusa d'ufficio", "Nessuna risposta"].map((label) => ({ value: label, label }));
 const PER_PAGE_OPTIONS = [10, 25, 50, 100] as const;
 const SORT_FIELDS = ["rgm", "oggetto", "data_deposito", "data_protocollo", "data_chiusura", "esito_finale", "modalita_mediazione", "competenza", "mediatore_name"] as const;
 const MAIN_COLOR = "#3aaeba";
@@ -466,7 +465,7 @@ export default function MediazioniList() {
                   <div className={filterableTableHeaderLabelClass}>
                     <SortLink label="Esito" field="esito_finale" currentSort={sortField} currentOrder={order} searchParams={searchParams} />
                   </div>
-                  <FilterSelect name="esito" defaultValue={filters.esito} options={ESITO_OPTIONS} emptyLabel="Tutti" />
+                  <FilterSelect name="esito" defaultValue={filters.esito} options={ESITO_FINALE_FILTER_OPTIONS} emptyLabel="Tutti" />
                 </th>
                 <th className={`${filterableTableThClass} min-w-[200px]`}>
                   <div className={filterableTableHeaderLabelClass}>

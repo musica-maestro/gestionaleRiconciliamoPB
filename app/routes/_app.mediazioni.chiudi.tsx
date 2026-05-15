@@ -5,6 +5,7 @@ import * as XLSX from "xlsx";
 import { FileSpreadsheet, Loader2, Upload } from "lucide-react";
 import { createPB } from "~/lib/pocketbase.server";
 import { requireUserAndRole } from "~/lib/auth.server";
+import { normalizeEsitoFinale } from "~/lib/esito-finale";
 
 type CloseRow = {
   index: number;
@@ -65,7 +66,9 @@ function mapExcelRowsToClose(jsonRows: Record<string, unknown>[]): CloseRow[] {
       return {
         index: index + 1,
         rgm: String(values.rgm ?? "").trim(),
-        esito_finale: String(values.esito_finale ?? "").trim(),
+        esito_finale: normalizeEsitoFinale(
+          String(values.esito_finale ?? values.esito ?? "")
+        ),
         data_chiusura: parseExcelDate(values.data_chiusura),
         nota: String(values.nota ?? "").trim(),
       };
@@ -311,8 +314,9 @@ export default function ChiudiMediazioniFromExcel() {
 
       <h1 className="text-2xl font-semibold text-slate-800 mb-2">Chiudi mediazioni da Excel</h1>
       <p className="text-slate-600 mb-6">
-        Carica un file Excel con le colonne <strong>rgm</strong>, <strong>esito_finale</strong>,{" "}
-        <strong>data_chiusura</strong>, <strong>nota</strong>. Prima viene eseguita una validazione
+        Carica un file Excel con le colonne <strong>rgm</strong>, <strong>esito</strong> (o{" "}
+        <strong>esito_finale</strong>), <strong>data_chiusura</strong>, <strong>nota</strong>. Prima
+        viene eseguita una validazione
         completa; se non ci sono problemi, puoi confermare la chiusura massiva.
       </p>
 
