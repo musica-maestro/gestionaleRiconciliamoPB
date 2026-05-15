@@ -42,6 +42,10 @@ function italianLocalToUTC(localStr: string): string | undefined {
   return new Date(approxEpoch - offsetMs).toISOString().replace("T", " ").slice(0, 19) + ".000Z";
 }
 
+function toInputDate(d: string | null | undefined): string {
+  return d ? new Date(d).toISOString().slice(0, 10) : "";
+}
+
 function canAccessMediazione(
   role: string | undefined,
   userId: string,
@@ -369,6 +373,54 @@ export async function action({ request, params }: ActionFunctionArgs) {
       nota,
     });
     return redirect(`/mediazioni/${id}?tab=fatture`);
+  } else if (intent === "update_fattura") {
+    const fattura_id = String(formData.get("fattura_id") ?? "");
+    if (!fattura_id) return redirect(`/mediazioni/${id}?tab=fatture`);
+    const numero_fattura = String(formData.get("numero_fattura") ?? "").trim() || undefined;
+    const data_emissione_fattura = formData.get("data_emissione_fattura")
+      ? String(formData.get("data_emissione_fattura"))
+      : undefined;
+    const data_incasso = formData.get("data_incasso")
+      ? String(formData.get("data_incasso"))
+      : undefined;
+    const imponibileRaw = formData.get("imponibile");
+    const imponibile =
+      imponibileRaw !== null && imponibileRaw !== ""
+        ? Number(imponibileRaw)
+        : undefined;
+    const nota = String(formData.get("nota") ?? "").trim() || undefined;
+    await pb.collection("fatture").update(fattura_id, {
+      numero_fattura,
+      data_emissione_fattura: data_emissione_fattura || null,
+      data_incasso: data_incasso || null,
+      imponibile,
+      nota,
+    });
+    return redirect(`/mediazioni/${id}?tab=fatture`);
+  } else if (intent === "delete_fattura") {
+    const fattura_id = String(formData.get("fattura_id") ?? "");
+    if (!fattura_id) return redirect(`/mediazioni/${id}?tab=fatture`);
+    await pb.collection("fatture").delete(fattura_id);
+    return redirect(`/mediazioni/${id}?tab=fatture`);
+  } else if (intent === "update_convocazione") {
+    const convocazione_id = String(formData.get("convocazione_id") ?? "");
+    if (!convocazione_id) return redirect(`/mediazioni/${id}?tab=convocazioni`);
+    await pb.collection("convocazioni").update(convocazione_id, {
+      data_invio: formData.get("data_invio") ? String(formData.get("data_invio")) : undefined,
+      tipologia: String(formData.get("tipologia") ?? "PEC"),
+      nota: String(formData.get("nota") ?? "").trim() || undefined,
+    });
+    return redirect(`/mediazioni/${id}?tab=convocazioni`);
+  } else if (intent === "delete_convocazione") {
+    const convocazione_id = String(formData.get("convocazione_id") ?? "");
+    if (!convocazione_id) return redirect(`/mediazioni/${id}?tab=convocazioni`);
+    await pb.collection("convocazioni").delete(convocazione_id);
+    return redirect(`/mediazioni/${id}?tab=convocazioni`);
+  } else if (intent === "delete_documento") {
+    const documento_id = String(formData.get("documento_id") ?? "");
+    if (!documento_id) return redirect(`/mediazioni/${id}?tab=documenti`);
+    await pb.collection("documenti").delete(documento_id);
+    return redirect(`/mediazioni/${id}?tab=documenti`);
   } else if (intent === "delete_mediazione") {
     if (role !== "admin" && role !== "manager") {
       throw new Response("Forbidden", { status: 403 });
@@ -1445,6 +1497,159 @@ function AddDocumentoDialog({
   );
 }
 
+// ─── Edit Fattura Dialog ──────────────────────────────────────────────────────
+
+function EditFatturaDialog({
+  fattura,
+  onClose,
+}: {
+  fattura: Fattura | null;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    if (!fattura) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [fattura, onClose]);
+
+  if (!fattura) return null;
+
+  const toDate = (d: string | null | undefined) =>
+    d ? new Date(d).toISOString().slice(0, 10) : "";
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="w-full max-w-lg bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col">
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5">
+          <h2 className="text-base font-semibold text-slate-800">Modifica fattura</h2>
+          <button type="button" onClick={onClose} className="rounded-md p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <Form method="post" onSubmit={onClose} className="px-5 py-4 space-y-4">
+          <input type="hidden" name="_action" value="update_fattura" />
+          <input type="hidden" name="fattura_id" value={fattura.id} />
+          <div>
+            <label className={EDIT_LABEL}>N. Fattura</label>
+            <input name="numero_fattura" defaultValue={fattura.numero_fattura} className={EDIT_INPUT} placeholder="es. 2024-001" />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className={EDIT_LABEL}>Data emissione</label>
+              <input type="date" name="data_emissione_fattura" defaultValue={toDate(fattura.data_emissione_fattura)} className={EDIT_INPUT} />
+            </div>
+            <div>
+              <label className={EDIT_LABEL}>Data incasso</label>
+              <input type="date" name="data_incasso" defaultValue={toDate(fattura.data_incasso)} className={EDIT_INPUT} />
+            </div>
+          </div>
+          <div>
+            <label className={EDIT_LABEL}>Imponibile (€)</label>
+            <input
+              name="imponibile"
+              type="number"
+              step="0.01"
+              min="0"
+              defaultValue={fattura.imponibile !== "" ? String(fattura.imponibile) : ""}
+              className={EDIT_INPUT}
+              placeholder="0.00"
+            />
+          </div>
+          <div>
+            <label className={EDIT_LABEL}>Nota</label>
+            <textarea name="nota" rows={2} defaultValue={fattura.nota} className={EDIT_INPUT} />
+          </div>
+          <div className="pt-1 flex gap-2.5">
+            <button type="button" onClick={onClose} className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors">
+              Annulla
+            </button>
+            <button type="submit" className="flex-1 rounded-lg bg-[#3aaeba] px-3 py-2 text-sm font-semibold text-white hover:bg-[#349aa5] transition-colors">
+              Salva modifiche
+            </button>
+          </div>
+        </Form>
+      </div>
+    </div>
+  );
+}
+
+// ─── Edit Convocazione Dialog ─────────────────────────────────────────────────
+
+function EditConvocazioneDialog({
+  convocazione,
+  onClose,
+}: {
+  convocazione: ConvocazioneEdit | null;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    if (!convocazione) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [convocazione, onClose]);
+
+  if (!convocazione) return null;
+
+  const toDate = (d: string | undefined) =>
+    d ? new Date(d).toISOString().slice(0, 10) : "";
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="w-full max-w-lg bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col">
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5">
+          <div>
+            <h2 className="text-base font-semibold text-slate-800">Modifica convocazione</h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {convocazione.soggetto_name}{" "}
+              <span className="text-slate-400">({convocazione.istante_o_chiamato})</span>
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-md p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <Form method="post" onSubmit={onClose} className="px-5 py-4 space-y-4">
+          <input type="hidden" name="_action" value="update_convocazione" />
+          <input type="hidden" name="convocazione_id" value={convocazione.id} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className={EDIT_LABEL}>Data invio</label>
+              <input type="date" name="data_invio" defaultValue={toDate(convocazione.data_invio)} className={EDIT_INPUT} />
+            </div>
+            <div>
+              <label className={EDIT_LABEL}>Tipologia</label>
+              <select name="tipologia" defaultValue={convocazione.tipologia ?? "PEC"} className={EDIT_INPUT}>
+                <option value="PEC">PEC</option>
+                <option value="Raccomandata">Raccomandata</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className={EDIT_LABEL}>Nota</label>
+            <textarea name="nota" rows={2} defaultValue={convocazione.nota ?? ""} className={EDIT_INPUT} placeholder="Note sulla convocazione" />
+          </div>
+          <div className="pt-1 flex gap-2.5">
+            <button type="button" onClick={onClose} className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors">
+              Annulla
+            </button>
+            <button type="submit" className="flex-1 rounded-lg bg-[#3aaeba] px-3 py-2 text-sm font-semibold text-white hover:bg-[#349aa5] transition-colors">
+              Salva modifiche
+            </button>
+          </div>
+        </Form>
+      </div>
+    </div>
+  );
+}
+
 // ─── Add Fattura Dialog ────────────────────────────────────────────────────────
 
 function AddFatturaDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
@@ -1518,6 +1723,24 @@ type Incontro = {
   link_incontro: string;
 };
 
+type Fattura = {
+  id: string;
+  numero_fattura: string;
+  data_emissione_fattura: string | null | undefined;
+  data_incasso: string | null | undefined;
+  imponibile: string | number;
+  nota: string;
+};
+
+type ConvocazioneEdit = {
+  id: string;
+  data_invio?: string;
+  tipologia?: string;
+  nota?: string;
+  soggetto_name: string;
+  istante_o_chiamato: string;
+};
+
 type DialogMode =
   | { type: "addParte" }
   | { type: "manageAvvocati"; parte: Parte }
@@ -1526,8 +1749,10 @@ type DialogMode =
   | { type: "addIncontro" }
   | { type: "editIncontro"; incontro: Incontro }
   | { type: "addConvocazione" }
+  | { type: "editConvocazione"; convocazione: ConvocazioneEdit }
   | { type: "addDocumento" }
   | { type: "addFattura" }
+  | { type: "editFattura"; fattura: Fattura }
   | null;
 
 export default function MediazioneDetail() {
@@ -2210,9 +2435,9 @@ export default function MediazioneDetail() {
               p.convocazioni.map((c) => (
                 <div
                   key={c.id}
-                  className="rounded-lg border border-slate-200 bg-white p-3 flex justify-between items-start"
+                  className="rounded-lg border border-slate-200 bg-white p-3 flex justify-between items-start gap-2"
                 >
-                  <div>
+                  <div className="min-w-0">
                     <span className="font-medium text-slate-800">{p.soggetto_name}</span>
                     <span className="text-slate-500 ml-2">({p.istante_o_chiamato})</span>
                     <p className="text-slate-600 mt-0.5">
@@ -2221,7 +2446,41 @@ export default function MediazioneDetail() {
                         : "—"}{" "}
                       · {c.tipologia ?? "—"}
                     </p>
-                    {c.nota && <p className="text-slate-500">{c.nota}</p>}
+                    {c.nota && <p className="text-slate-500 mt-0.5">{c.nota}</p>}
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDialogMode({
+                          type: "editConvocazione",
+                          convocazione: {
+                            id: c.id,
+                            data_invio: c.data_invio,
+                            tipologia: c.tipologia,
+                            nota: c.nota,
+                            soggetto_name: p.soggetto_name,
+                            istante_o_chiamato: p.istante_o_chiamato,
+                          },
+                        })
+                      }
+                      className="rounded p-1 text-slate-300 hover:text-[#3aaeba] hover:bg-[#3aaeba]/10 transition-colors"
+                      title="Modifica convocazione"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                    <Form method="post">
+                      <input type="hidden" name="_action" value="delete_convocazione" />
+                      <input type="hidden" name="convocazione_id" value={c.id} />
+                      <button
+                        type="submit"
+                        onClick={(e) => { if (!confirm("Eliminare questa convocazione?")) e.preventDefault(); }}
+                        className="rounded p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+                        title="Elimina convocazione"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </Form>
                   </div>
                 </div>
               ))
@@ -2281,6 +2540,18 @@ export default function MediazioneDetail() {
                           Scarica
                         </a>
                       )}
+                      <Form method="post">
+                        <input type="hidden" name="_action" value="delete_documento" />
+                        <input type="hidden" name="documento_id" value={d.id} />
+                        <button
+                          type="submit"
+                          onClick={(e) => { if (!confirm("Eliminare questo documento?")) e.preventDefault(); }}
+                          className="rounded p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+                          title="Elimina documento"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </Form>
                     </div>
                   </li>
                 ))}
@@ -2323,27 +2594,60 @@ export default function MediazioneDetail() {
                         Data emissione
                       </th>
                       <th className="px-3 py-2 text-left text-[11px] sm:text-xs font-medium text-slate-500">
+                        Data incasso
+                      </th>
+                      <th className="px-3 py-2 text-left text-[11px] sm:text-xs font-medium text-slate-500">
                         Imponibile
                       </th>
                       <th className="px-3 py-2 text-left text-[11px] sm:text-xs font-medium text-slate-500">
                         Nota
                       </th>
+                      <th className="px-3 py-2 w-16" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 bg-white">
                     {fatture.map((f) => (
-                      <tr key={f.id}>
-                        <td className="px-3 py-1.5 text-xs sm:text-sm text-slate-900">{f.numero_fattura}</td>
+                      <tr key={String(f.id)}>
+                        <td className="px-3 py-1.5 text-xs sm:text-sm text-slate-900">{String(f.numero_fattura) || "—"}</td>
                         <td className="px-3 py-1.5 text-xs sm:text-sm text-slate-600">
                           {f.data_emissione_fattura
-                            ? new Date(f.data_emissione_fattura).toLocaleDateString("it-IT")
+                            ? new Date(f.data_emissione_fattura as string).toLocaleDateString("it-IT")
                             : "—"}
                         </td>
                         <td className="px-3 py-1.5 text-xs sm:text-sm text-slate-600">
-                          {f.imponibile != null ? `€ ${Number(f.imponibile)}` : "—"}
+                          {f.data_incasso
+                            ? new Date(f.data_incasso as string).toLocaleDateString("it-IT")
+                            : "—"}
                         </td>
-                        <td className="px-3 py-1.5 text-[11px] sm:text-xs text-slate-600">
-                          {f.nota || "—"}
+                        <td className="px-3 py-1.5 text-xs sm:text-sm text-slate-600">
+                          {f.imponibile !== "" && f.imponibile != null ? `€ ${Number(f.imponibile).toFixed(2)}` : "—"}
+                        </td>
+                        <td className="px-3 py-1.5 text-[11px] sm:text-xs text-slate-600 max-w-[120px] truncate">
+                          {String(f.nota) || "—"}
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <div className="flex items-center gap-1 justify-end">
+                            <button
+                              type="button"
+                              onClick={() => setDialogMode({ type: "editFattura", fattura: f as Fattura })}
+                              className="rounded p-1 text-slate-400 hover:text-[#3aaeba] hover:bg-[#3aaeba]/10 transition-colors"
+                              title="Modifica fattura"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                            <Form method="post">
+                              <input type="hidden" name="_action" value="delete_fattura" />
+                              <input type="hidden" name="fattura_id" value={String(f.id)} />
+                              <button
+                                type="submit"
+                                onClick={(e) => { if (!confirm("Eliminare questa fattura?")) e.preventDefault(); }}
+                                className="rounded p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                                title="Elimina fattura"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </Form>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -2506,6 +2810,18 @@ export default function MediazioneDetail() {
       {/* ── Add Fattura dialog ── */}
       <AddFatturaDialog
         isOpen={dialogMode?.type === "addFattura"}
+        onClose={closeDialog}
+      />
+
+      {/* ── Edit Fattura dialog ── */}
+      <EditFatturaDialog
+        fattura={dialogMode?.type === "editFattura" ? dialogMode.fattura : null}
+        onClose={closeDialog}
+      />
+
+      {/* ── Edit Convocazione dialog ── */}
+      <EditConvocazioneDialog
+        convocazione={dialogMode?.type === "editConvocazione" ? dialogMode.convocazione : null}
         onClose={closeDialog}
       />
     </div>
