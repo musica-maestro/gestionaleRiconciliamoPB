@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { Link, useFetcher } from "@remix-run/react";
 import { json, redirect, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
 import * as XLSX from "xlsx";
-import { FileSpreadsheet, Loader2, Upload } from "lucide-react";
+import { Download, FileSpreadsheet, Loader2, Upload } from "lucide-react";
 import { createPB } from "~/lib/pocketbase.server";
 import { requireUserAndRole } from "~/lib/auth.server";
 import { normalizeEsitoFinale } from "~/lib/esito-finale";
@@ -173,28 +173,18 @@ export async function action({ request }: ActionFunctionArgs) {
       step: "validate" as const,
       validRows,
       issues,
-      canClose: issues.length === 0 && validRows.length > 0,
+      canClose: validRows.length > 0,
       message:
-        issues.length > 0
-          ? `Validazione completata con ${issues.length} problemi.`
+        issues.length > 0 && validRows.length > 0
+          ? `Validazione completata: ${validRows.length} righe valide, ${issues.length} con problemi (verranno saltate).`
+          : issues.length > 0
+          ? `Validazione completata: tutte le ${issues.length} righe hanno problemi.`
           : `Validazione OK: ${validRows.length} mediazioni pronte per la chiusura.`,
     });
   }
 
   if (actionType !== "close") {
     return json({ error: "Azione non valida" }, 400);
-  }
-
-  if (issues.length > 0) {
-    return json(
-      {
-        step: "close" as const,
-        success: 0,
-        errors: issues.map((i) => ({ index: i.index, rgm: i.rgm, error: i.error })),
-        message: "Impossibile chiudere: la validazione ha trovato problemi.",
-      },
-      { status: 400 }
-    );
   }
 
   let success = 0;
@@ -225,12 +215,42 @@ export async function action({ request }: ActionFunctionArgs) {
     }
   }
 
+  const allErrors = [
+    ...issues.map((i) => ({ index: i.index, rgm: i.rgm, error: i.error })),
+    ...errors,
+  ];
+
   return json({
     step: "close" as const,
     success,
-    errors,
-    message: `Chiusura completata: ${success} mediazioni aggiornate${errors.length ? `, ${errors.length} errori` : ""}.`,
+    errors: allErrors,
+    message:
+      success > 0
+        ? `Chiusura completata: ${success} mediazioni aggiornate${allErrors.length ? `, ${allErrors.length} saltate con problemi` : ""}.`
+        : `Nessuna mediazione chiusa: tutte le ${allErrors.length} righe hanno problemi.`,
   });
+}
+
+function downloadIssuesAsExcel(
+  issues: { index: number; rgm: string; error: string }[],
+  parsedRows: CloseRow[]
+) {
+  const rowMap = new Map(parsedRows.map((r) => [r.index, r]));
+  const data = issues.map((issue) => {
+    const original = rowMap.get(issue.index);
+    return {
+      Riga: issue.index,
+      RGM: issue.rgm || original?.rgm || "",
+      Esito_finale: original?.esito_finale || "",
+      Data_chiusura: original?.data_chiusura || "",
+      Nota: original?.nota || "",
+      Problema: issue.error,
+    };
+  });
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Problemi");
+  XLSX.writeFile(wb, "mediazioni_con_problemi.xlsx");
 }
 
 export default function ChiudiMediazioniFromExcel() {
@@ -316,8 +336,8 @@ export default function ChiudiMediazioniFromExcel() {
       <p className="text-slate-600 mb-6">
         Carica un file Excel con le colonne <strong>rgm</strong>, <strong>esito</strong> (o{" "}
         <strong>esito_finale</strong>), <strong>data_chiusura</strong>, <strong>nota</strong>. Prima
-        viene eseguita una validazione
-        completa; se non ci sono problemi, puoi confermare la chiusura massiva.
+        viene eseguita una validazione completa; le righe con problemi vengono saltate e puoi
+        scaricarle come Excel separato per correggerle e ricaricarle.
       </p>
 
       <div className="mb-6">
@@ -386,48 +406,78 @@ export default function ChiudiMediazioniFromExcel() {
       )}
 
       {validationIssues.length > 0 && (
-        <div className="overflow-x-auto border border-warning/40 rounded-lg mb-6">
-          <table className="table table-sm">
-            <thead>
-              <tr>
-                <th>Riga</th>
-                <th>RGM</th>
-                <th>Problema</th>
-              </tr>
-            </thead>
-            <tbody>
-              {validationIssues.map((issue) => (
-                <tr key={`${issue.index}-${issue.rgm}-${issue.error}`}>
-                  <td>{issue.index}</td>
-                  <td>{issue.rgm || "—"}</td>
-                  <td>{issue.error}</td>
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm font-medium text-warning">
+              {validationIssues.length} {validationIssues.length === 1 ? "riga con problema" : "righe con problemi"} — verranno saltate durante la chiusura
+            </p>
+            <button
+              type="button"
+              onClick={() => downloadIssuesAsExcel(validationIssues, parsedRows)}
+              className="btn btn-sm btn-ghost gap-1"
+            >
+              <Download className="w-3 h-3" />
+              Scarica righe con problemi
+            </button>
+          </div>
+          <div className="overflow-x-auto border border-warning/40 rounded-lg">
+            <table className="table table-sm">
+              <thead>
+                <tr>
+                  <th>Riga</th>
+                  <th>RGM</th>
+                  <th>Problema</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {validationIssues.map((issue) => (
+                  <tr key={`${issue.index}-${issue.rgm}-${issue.error}`}>
+                    <td>{issue.index}</td>
+                    <td>{issue.rgm || "—"}</td>
+                    <td>{issue.error}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
       {closeErrors.length > 0 && actionData && "step" in actionData && actionData.step === "close" && (
-        <div className="overflow-x-auto border border-warning/40 rounded-lg mb-6">
-          <table className="table table-sm">
-            <thead>
-              <tr>
-                <th>Riga</th>
-                <th>RGM</th>
-                <th>Errore</th>
-              </tr>
-            </thead>
-            <tbody>
-              {closeErrors.map((err) => (
-                <tr key={`${err.index}-${err.rgm}-${err.error}`}>
-                  <td>{err.index}</td>
-                  <td>{err.rgm || "—"}</td>
-                  <td>{err.error}</td>
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm font-medium text-warning">
+              {closeErrors.length} {closeErrors.length === 1 ? "riga saltata" : "righe saltate"} durante la chiusura
+            </p>
+            <button
+              type="button"
+              onClick={() => downloadIssuesAsExcel(closeErrors, parsedRows)}
+              className="btn btn-sm btn-ghost gap-1"
+            >
+              <Download className="w-3 h-3" />
+              Scarica righe con problemi
+            </button>
+          </div>
+          <div className="overflow-x-auto border border-warning/40 rounded-lg">
+            <table className="table table-sm">
+              <thead>
+                <tr>
+                  <th>Riga</th>
+                  <th>RGM</th>
+                  <th>Problema</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {closeErrors.map((err) => (
+                  <tr key={`${err.index}-${err.rgm}-${err.error}`}>
+                    <td>{err.index}</td>
+                    <td>{err.rgm || "—"}</td>
+                    <td>{err.error}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
