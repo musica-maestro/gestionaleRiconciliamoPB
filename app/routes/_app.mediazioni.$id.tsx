@@ -2070,6 +2070,20 @@ export default function MediazioneDetail() {
                     </select>
                   </dd>
                 </div>
+                <div>
+                  <dt className="font-medium text-slate-500 mb-0.5">Data chiusura</dt>
+                  <dd>
+                    <input
+                      name="data_chiusura"
+                      type="date"
+                      defaultValue={toInputDate(mediazione.data_chiusura)}
+                      className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
+                    />
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      Entrambi i campi Esito e Data chiusura sono necessari per chiudere la mediazione.
+                    </p>
+                  </dd>
+                </div>
                 <div className="sm:col-span-2">
                   <dt className="font-medium text-slate-500 mb-0.5">Oggetto / Materia</dt>
                   <dd>
@@ -2166,17 +2180,6 @@ export default function MediazioneDetail() {
                     <datalist id="modalita-convocazione-list">
                       {modalitaConvocazioneOpzioni.map((o) => <option key={o} value={o} />)}
                     </datalist>
-                  </dd>
-                </div>
-                <div>
-                  <dt className="font-medium text-slate-500 mb-0.5">Data chiusura</dt>
-                  <dd>
-                    <input
-                      name="data_chiusura"
-                      type="date"
-                      defaultValue={toInputDate(mediazione.data_chiusura)}
-                      className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
-                    />
                   </dd>
                 </div>
                 <div className="sm:col-span-2">

@@ -5,7 +5,7 @@ import * as XLSX from "xlsx";
 import { Download, FileSpreadsheet, Loader2, Upload } from "lucide-react";
 import { createPB } from "~/lib/pocketbase.server";
 import { requireUserAndRole } from "~/lib/auth.server";
-import { normalizeEsitoFinale } from "~/lib/esito-finale";
+import { ESITO_FINALE_VALUES, normalizeEsitoFinale } from "~/lib/esito-finale";
 
 type CloseRow = {
   index: number;
@@ -19,6 +19,10 @@ type RowValidationIssue = {
   index: number;
   rgm: string;
   error: string;
+  /** true when one or both fields are missing but the row is otherwise valid */
+  completable?: boolean;
+  missingFields?: ("esito_finale" | "data_chiusura")[];
+  mediazioneId?: string;
 };
 
 type ValidatedRow = CloseRow & {
@@ -79,7 +83,7 @@ function mapExcelRowsToClose(jsonRows: Record<string, unknown>[]): CloseRow[] {
 function isAlreadyClosed(row: { esito_finale?: unknown; data_chiusura?: unknown }) {
   const dataChiusura = row.data_chiusura ? String(row.data_chiusura).trim() : "";
   const esito = row.esito_finale ? String(row.esito_finale).trim().toLowerCase() : "";
-  return Boolean(dataChiusura) || (Boolean(esito) && esito !== "in corso");
+  return Boolean(dataChiusura) && Boolean(esito) && esito !== "in corso";
 }
 
 async function validateRows(
@@ -93,14 +97,6 @@ async function validateRows(
   for (const row of rows) {
     if (!row.rgm) {
       issues.push({ index: row.index, rgm: "", error: "RGM mancante" });
-      continue;
-    }
-    if (!row.esito_finale) {
-      issues.push({ index: row.index, rgm: row.rgm, error: "Esito finale mancante" });
-      continue;
-    }
-    if (!row.data_chiusura) {
-      issues.push({ index: row.index, rgm: row.rgm, error: "Data chiusura mancante o non valida" });
       continue;
     }
 
@@ -129,14 +125,35 @@ async function validateRows(
       continue;
     }
     if (isAlreadyClosed(found[0] as { esito_finale?: unknown; data_chiusura?: unknown })) {
-      issues.push({ index: row.index, rgm: row.rgm, error: "Mediazione gia chiusa" });
+      issues.push({ index: row.index, rgm: row.rgm, error: "Mediazione già chiusa" });
       continue;
     }
 
-    validRows.push({
-      ...row,
-      mediazioneId: String((found[0] as { id: string }).id),
-    });
+    const mediazioneId = String((found[0] as { id: string }).id);
+
+    const missingFields: ("esito_finale" | "data_chiusura")[] = [];
+    if (!row.esito_finale) missingFields.push("esito_finale");
+    if (!row.data_chiusura) missingFields.push("data_chiusura");
+
+    if (missingFields.length > 0) {
+      const label =
+        missingFields.length === 2
+          ? "Esito finale e data chiusura mancanti"
+          : missingFields[0] === "esito_finale"
+          ? "Esito finale mancante"
+          : "Data chiusura mancante o non valida";
+      issues.push({
+        index: row.index,
+        rgm: row.rgm,
+        error: label,
+        completable: true,
+        missingFields,
+        mediazioneId,
+      });
+      continue;
+    }
+
+    validRows.push({ ...row, mediazioneId });
   }
 
   return { validRows, issues };
@@ -173,10 +190,10 @@ export async function action({ request }: ActionFunctionArgs) {
       step: "validate" as const,
       validRows,
       issues,
-      canClose: validRows.length > 0,
+      canClose: validRows.length > 0 || issues.some((i) => i.completable),
       message:
         issues.length > 0 && validRows.length > 0
-          ? `Validazione completata: ${validRows.length} righe valide, ${issues.length} con problemi (verranno saltate).`
+          ? `Validazione completata: ${validRows.length} righe valide, ${issues.length} con problemi.`
           : issues.length > 0
           ? `Validazione completata: tutte le ${issues.length} righe hanno problemi.`
           : `Validazione OK: ${validRows.length} mediazioni pronte per la chiusura.`,
@@ -260,6 +277,12 @@ export default function ChiudiMediazioniFromExcel() {
   const isSubmitting = fetcher.state === "submitting" || fetcher.state === "loading";
   const actionData = fetcher.data;
 
+  const updateRowField = (index: number, field: "esito_finale" | "data_chiusura", value: string) => {
+    setParsedRows((prev) =>
+      prev.map((r) => (r.index === index ? { ...r, [field]: value } : r))
+    );
+  };
+
   const onFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -313,8 +336,10 @@ export default function ChiudiMediazioniFromExcel() {
 
   const validationIssues =
     actionData && "issues" in actionData && Array.isArray(actionData.issues)
-      ? actionData.issues
+      ? (actionData.issues as RowValidationIssue[])
       : [];
+  const completableIssues = validationIssues.filter((i) => i.completable);
+  const fatalIssues = validationIssues.filter((i) => !i.completable);
   const canClose = Boolean(actionData && "canClose" in actionData && actionData.canClose);
   const closeErrors =
     actionData && "errors" in actionData && Array.isArray(actionData.errors)
@@ -322,8 +347,8 @@ export default function ChiudiMediazioniFromExcel() {
       : [];
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-6">
-      <div className="mb-6">
+    <div className="mx-auto max-w-6xl px-4 py-2">
+      <div className="mb-2">
         <Link
           to="/mediazioni"
           className="text-sm text-slate-600 hover:text-slate-900 hover:underline"
@@ -331,16 +356,14 @@ export default function ChiudiMediazioniFromExcel() {
           ← Elenco mediazioni
         </Link>
       </div>
-
-      <h1 className="text-2xl font-semibold text-slate-800 mb-2">Chiudi mediazioni da Excel</h1>
-      <p className="text-slate-600 mb-6">
+      <p className="text-sm text-slate-500 mb-4">
         Carica un file Excel con le colonne <strong>rgm</strong>, <strong>esito</strong> (o{" "}
         <strong>esito_finale</strong>), <strong>data_chiusura</strong>, <strong>nota</strong>. Prima
         viene eseguita una validazione completa; le righe con problemi vengono saltate e puoi
         scaricarle come Excel separato per correggerle e ricaricarle.
       </p>
 
-      <div className="mb-6">
+      <div className="mb-2">
         <input
           ref={fileInputRef}
           type="file"
@@ -364,36 +387,9 @@ export default function ChiudiMediazioniFromExcel() {
         )}
       </div>
 
-      {parsedRows.length > 0 && (
-        <div className="overflow-x-auto border border-slate-200 rounded-lg mb-6">
-          <table className="table table-zebra table-pin-rows">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>RGM</th>
-                <th>Esito finale</th>
-                <th>Data chiusura</th>
-                <th>Nota da aggiungere</th>
-              </tr>
-            </thead>
-            <tbody>
-              {parsedRows.map((row) => (
-                <tr key={`${row.index}-${row.rgm}`}>
-                  <td>{row.index}</td>
-                  <td>{row.rgm || "—"}</td>
-                  <td>{row.esito_finale || "—"}</td>
-                  <td>{row.data_chiusura || "—"}</td>
-                  <td>{row.nota || "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
       {actionData && "message" in actionData && (
         <div
-          className={`alert mb-6 ${
+          className={`alert mb-4 ${
             "errors" in actionData &&
             Array.isArray(actionData.errors) &&
             actionData.errors.length > 0
@@ -405,84 +401,201 @@ export default function ChiudiMediazioniFromExcel() {
         </div>
       )}
 
-      {validationIssues.length > 0 && (
-        <div className="mb-6">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-sm font-medium text-warning">
-              {validationIssues.length} {validationIssues.length === 1 ? "riga con problema" : "righe con problemi"} — verranno saltate durante la chiusura
+      {/* Two-column layout: parsed rows on the left, issues on the right */}
+      {parsedRows.length > 0 && (
+        <div
+          className={`mb-4 gap-4 ${
+            completableIssues.length > 0 || fatalIssues.length > 0 || closeErrors.length > 0
+              ? "grid grid-cols-2"
+              : ""
+          }`}
+        >
+          {/* Left: parsed rows preview */}
+          <div className="flex flex-col min-h-0">
+            <p className="text-xs font-medium text-slate-500 mb-1">
+              {parsedRows.length} righe caricate
             </p>
-            <button
-              type="button"
-              onClick={() => downloadIssuesAsExcel(validationIssues, parsedRows)}
-              className="btn btn-sm btn-ghost gap-1"
-            >
-              <Download className="w-3 h-3" />
-              Scarica righe con problemi
-            </button>
-          </div>
-          <div className="overflow-x-auto border border-warning/40 rounded-lg">
-            <table className="table table-sm">
-              <thead>
-                <tr>
-                  <th>Riga</th>
-                  <th>RGM</th>
-                  <th>Problema</th>
-                </tr>
-              </thead>
-              <tbody>
-                {validationIssues.map((issue) => (
-                  <tr key={`${issue.index}-${issue.rgm}-${issue.error}`}>
-                    <td>{issue.index}</td>
-                    <td>{issue.rgm || "—"}</td>
-                    <td>{issue.error}</td>
+            <div className="overflow-auto max-h-[52vh] border border-slate-200 rounded-lg">
+              <table className="table table-zebra table-pin-rows table-sm">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>RGM</th>
+                    <th>Esito finale</th>
+                    <th>Data chiusura</th>
+                    <th>Nota</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {parsedRows.map((row) => (
+                    <tr key={`${row.index}-${row.rgm}`}>
+                      <td>{row.index}</td>
+                      <td>{row.rgm || "—"}</td>
+                      <td>{row.esito_finale || "—"}</td>
+                      <td>{row.data_chiusura || "—"}</td>
+                      <td>{row.nota || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      )}
 
-      {closeErrors.length > 0 && actionData && "step" in actionData && actionData.step === "close" && (
-        <div className="mb-6">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-sm font-medium text-warning">
-              {closeErrors.length} {closeErrors.length === 1 ? "riga saltata" : "righe saltate"} durante la chiusura
-            </p>
-            <button
-              type="button"
-              onClick={() => downloadIssuesAsExcel(closeErrors, parsedRows)}
-              className="btn btn-sm btn-ghost gap-1"
-            >
-              <Download className="w-3 h-3" />
-              Scarica righe con problemi
-            </button>
-          </div>
-          <div className="overflow-x-auto border border-warning/40 rounded-lg">
-            <table className="table table-sm">
-              <thead>
-                <tr>
-                  <th>Riga</th>
-                  <th>RGM</th>
-                  <th>Problema</th>
-                </tr>
-              </thead>
-              <tbody>
-                {closeErrors.map((err) => (
-                  <tr key={`${err.index}-${err.rgm}-${err.error}`}>
-                    <td>{err.index}</td>
-                    <td>{err.rgm || "—"}</td>
-                    <td>{err.error}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {/* Right: completable + fatal + close errors — each section is its own scroll container */}
+          {(completableIssues.length > 0 || fatalIssues.length > 0 || (closeErrors.length > 0 && actionData && "step" in actionData && actionData.step === "close")) && (
+            <div className="flex flex-col gap-2 max-h-[52vh] overflow-hidden">
+
+              {completableIssues.length > 0 && (
+                <div className="flex flex-col min-h-0 flex-1">
+                  <p className="shrink-0 text-xs font-medium text-amber-700 py-1 border-b border-amber-100">
+                    {completableIssues.length}{" "}
+                    {completableIssues.length === 1 ? "riga" : "righe"} con campo mancante — compila per includerle
+                  </p>
+                  <div className="overflow-auto min-h-0 flex-1 border border-amber-300 rounded-lg mt-1">
+                    <table className="table table-sm min-w-full">
+                      <thead className="sticky top-0 z-10 bg-white">
+                        <tr>
+                          <th>Riga</th>
+                          <th>RGM</th>
+                          <th>Esito finale</th>
+                          <th>Data chiusura</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {completableIssues.map((issue) => {
+                          const row = parsedRows.find((r) => r.index === issue.index);
+                          const needsEsito = issue.missingFields?.includes("esito_finale");
+                          const needsData = issue.missingFields?.includes("data_chiusura");
+                          return (
+                            <tr key={`completable-${issue.index}`}>
+                              <td>{issue.index}</td>
+                              <td>{issue.rgm}</td>
+                              <td>
+                                {needsEsito ? (
+                                  <select
+                                    value={row?.esito_finale ?? ""}
+                                    onChange={(e) =>
+                                      updateRowField(issue.index, "esito_finale", e.target.value)
+                                    }
+                                    className="select select-sm select-bordered w-full max-w-[180px]"
+                                  >
+                                    <option value="">— seleziona —</option>
+                                    {ESITO_FINALE_VALUES.map((v) => (
+                                      <option key={v} value={v}>{v}</option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <span>{row?.esito_finale || "—"}</span>
+                                )}
+                              </td>
+                              <td>
+                                {needsData ? (
+                                  <input
+                                    type="date"
+                                    value={row?.data_chiusura ?? ""}
+                                    onChange={(e) =>
+                                      updateRowField(issue.index, "data_chiusura", e.target.value)
+                                    }
+                                    className="input input-sm input-bordered w-full max-w-[150px]"
+                                  />
+                                ) : (
+                                  <span>{row?.data_chiusura || "—"}</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {fatalIssues.length > 0 && (
+                <div className="flex flex-col min-h-0 flex-1">
+                  <div className="shrink-0 flex items-center justify-between py-1 border-b border-warning/20">
+                    <p className="text-xs font-medium text-warning">
+                      {fatalIssues.length}{" "}
+                      {fatalIssues.length === 1 ? "riga con problema" : "righe con problemi"} — verranno saltate
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => downloadIssuesAsExcel(fatalIssues, parsedRows)}
+                      className="btn btn-xs btn-ghost gap-1"
+                    >
+                      <Download className="w-3 h-3" />
+                      Scarica
+                    </button>
+                  </div>
+                  <div className="overflow-auto min-h-0 flex-1 border border-warning/40 rounded-lg mt-1">
+                    <table className="table table-sm min-w-full">
+                      <thead className="sticky top-0 z-10 bg-white">
+                        <tr>
+                          <th>Riga</th>
+                          <th>RGM</th>
+                          <th>Problema</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {fatalIssues.map((issue) => (
+                          <tr key={`${issue.index}-${issue.rgm}-${issue.error}`}>
+                            <td>{issue.index}</td>
+                            <td>{issue.rgm || "—"}</td>
+                            <td>{issue.error}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {closeErrors.length > 0 && actionData && "step" in actionData && actionData.step === "close" && (
+                <div className="flex flex-col min-h-0 flex-1">
+                  <div className="shrink-0 flex items-center justify-between py-1 border-b border-warning/20">
+                    <p className="text-xs font-medium text-warning">
+                      {closeErrors.length}{" "}
+                      {closeErrors.length === 1 ? "riga saltata" : "righe saltate"} durante la chiusura
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => downloadIssuesAsExcel(closeErrors, parsedRows)}
+                      className="btn btn-xs btn-ghost gap-1"
+                    >
+                      <Download className="w-3 h-3" />
+                      Scarica
+                    </button>
+                  </div>
+                  <div className="overflow-auto min-h-0 flex-1 border border-warning/40 rounded-lg mt-1">
+                    <table className="table table-sm min-w-full">
+                      <thead className="sticky top-0 z-10 bg-white">
+                        <tr>
+                          <th>Riga</th>
+                          <th>RGM</th>
+                          <th>Problema</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {closeErrors.map((err) => (
+                          <tr key={`${err.index}-${err.rgm}-${err.error}`}>
+                            <td>{err.index}</td>
+                            <td>{err.rgm || "—"}</td>
+                            <td>{err.error}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+            </div>
+          )}
         </div>
       )}
 
       {parsedRows.length > 0 && (
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap gap-3 pt-2 border-t border-slate-100">
           <button
             type="button"
             onClick={submitValidate}
@@ -508,6 +621,11 @@ export default function ChiudiMediazioniFromExcel() {
               onClick={submitClose}
               disabled={isSubmitting}
               className="btn btn-warning"
+              title={
+                completableIssues.length > 0
+                  ? "Le righe con campo completato saranno incluse; quelle ancora vuote verranno saltate"
+                  : undefined
+              }
             >
               Conferma chiusura mediazioni
             </button>
