@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState } from "react";
 import { Link, useLoaderData, useSearchParams, useNavigate, useFetcher } from "@remix-run/react";
 import { json, type LoaderFunctionArgs } from "@remix-run/node";
 import type { MetaFunction } from "@remix-run/node";
@@ -18,7 +18,7 @@ import {
 } from "~/components/data-table";
 import { ExportMediazioniDialog } from "~/components/export-mediazioni-dialog";
 import { ESITO_FINALE_FILTER_OPTIONS } from "~/lib/esito-finale";
-import { Eye, MoreVertical, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from "lucide-react";
+import { Eye, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from "lucide-react";
 const PER_PAGE_OPTIONS = [10, 25, 50, 100] as const;
 const SORT_FIELDS = ["rgm", "oggetto", "data_deposito", "data_protocollo", "data_chiusura", "esito_finale", "modalita_mediazione", "competenza", "mediatore_name"] as const;
 const MAIN_COLOR = "#3aaeba";
@@ -163,56 +163,22 @@ function buildPerPageUrl(searchParams: URLSearchParams, perPage: number): string
   return `/mediazioni?${next.toString()}`;
 }
 
-function RowActionsDropdown({
-  mediazioneId,
-  canDelete,
-  onDelete,
-}: {
-  mediazioneId: string;
-  canDelete: boolean;
-  onDelete: (id: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    if (open) document.addEventListener("click", handleClickOutside);
-    return () => document.removeEventListener("click", handleClickOutside);
-  }, [open]);
-
+function DeleteButton({ mediazioneId, canDelete, onDelete }: { mediazioneId: string; canDelete: boolean; onDelete: (id: string) => void }) {
   if (!canDelete) return null;
-
   return (
-    <div className="relative" ref={ref}>
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="btn btn-ghost btn-sm btn-square min-h-0 h-8 w-8 p-0"
-        aria-label="Azioni"
-        aria-expanded={open}
-      >
-        <MoreVertical className="h-4 w-4" />
-      </button>
-      {open && (
-        <div className="dropdown-content z-20 mt-1 p-1 shadow-lg bg-base-100 rounded-lg border border-base-200 min-w-[160px] absolute right-0">
-          <button
-            type="button"
-            onClick={() => {
-              if (confirm("Sei sicuro di voler eliminare questa mediazione?")) {
-                onDelete(mediazioneId);
-                setOpen(false);
-              }
-            }}
-            className="flex items-center gap-2 w-full px-3 py-2 text-left text-sm text-error hover:bg-error/10 rounded-md"
-          >
-            Elimina mediazione
-          </button>
-        </div>
-      )}
-    </div>
+    <button
+      type="button"
+      onClick={() => {
+        if (confirm("Sei sicuro di voler eliminare questa mediazione?")) {
+          onDelete(mediazioneId);
+        }
+      }}
+      className="btn btn-ghost btn-sm btn-square min-h-0 h-8 w-8 p-0 text-error hover:bg-error/10"
+      aria-label="Elimina mediazione"
+      title="Elimina mediazione"
+    >
+      <Trash2 className="h-4 w-4" />
+    </button>
   );
 }
 
@@ -593,7 +559,7 @@ export default function MediazioniList() {
                         >
                           <Eye className="h-4 w-4" />
                         </Link>
-                        <RowActionsDropdown mediazioneId={m.id} canDelete={canDelete} onDelete={handleDelete} />
+                        <DeleteButton mediazioneId={m.id} canDelete={canDelete} onDelete={handleDelete} />
                       </div>
                     </td>
                   </tr>
