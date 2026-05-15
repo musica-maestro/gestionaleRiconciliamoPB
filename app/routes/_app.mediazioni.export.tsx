@@ -16,7 +16,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const url = new URL(request.url);
   const fieldsParam = url.searchParams.getAll("fields") as ExportFieldKey[];
-  const fields = fieldsParam.length > 0 ? fieldsParam : (["rgm", "oggetto", "valore", "istanti", "chiamati", "avvocati", "competenza", "nota", "modalita_mediazione", "motivazione_deposito", "modalita_convocazione", "mediatore_name", "esito_finale", "data_protocollo", "data_chiusura", "data_avvio_entro"] as ExportFieldKey[]);
+  const fields = fieldsParam.length > 0 ? fieldsParam : (["rgm", "oggetto", "valore", "istanti", "istanti_cf", "chiamati", "chiamati_cf", "avvocati", "competenza", "nota", "modalita_mediazione", "motivazione_deposito", "modalita_convocazione", "mediatore_name", "esito_finale", "data_protocollo", "data_chiusura", "data_avvio_entro"] as ExportFieldKey[]);
 
   const rgm = url.searchParams.get("rgm")?.trim() ?? "";
   const oggetto = url.searchParams.get("oggetto")?.trim() ?? "";
@@ -61,12 +61,49 @@ export async function loader({ request }: LoaderFunctionArgs) {
     ...(filter && { filter }),
   });
 
+  // Fetch CF for istanti and chiamati only when those fields are requested
+  const needsCf = fields.includes("istanti_cf") || fields.includes("chiamati_cf");
+  const istantiCfMap = new Map<string, string>();
+  const chiamatiCfMap = new Map<string, string>();
+
+  if (needsCf && items.length > 0) {
+    const mediazioneIds = items.map((m) => String(m.id));
+    const filterChunks: string[] = [];
+    for (let i = 0; i < mediazioneIds.length; i += 100) {
+      filterChunks.push(
+        mediazioneIds.slice(i, i + 100).map((id) => `mediazione = "${id}"`).join(" || ")
+      );
+    }
+    const partecipazioniAll: Awaited<ReturnType<typeof pb.collection>>[] = [];
+    for (const f of filterChunks) {
+      const chunk = await pb.collection("partecipazioni").getFullList({ filter: f, expand: "soggetto" });
+      partecipazioniAll.push(...chunk);
+    }
+
+    for (const p of partecipazioniAll) {
+      const medId = String(p.mediazione ?? "");
+      const soggetto = (p.expand as Record<string, Record<string, unknown>> | undefined)?.soggetto;
+      const cf = soggetto?.codice_fiscale ? String(soggetto.codice_fiscale) : "";
+      if (!cf) continue;
+      const role = String(p.istante_o_chiamato ?? "");
+      if (role === "Istante") {
+        const existing = istantiCfMap.get(medId);
+        istantiCfMap.set(medId, existing ? `${existing}, ${cf}` : cf);
+      } else if (role === "Chiamato") {
+        const existing = chiamatiCfMap.get(medId);
+        chiamatiCfMap.set(medId, existing ? `${existing}, ${cf}` : cf);
+      }
+    }
+  }
+
   const columnLabels: Record<string, string> = {
     rgm: "RGM",
     oggetto: "Oggetto",
     valore: "Valore",
     istanti: "Istanti",
+    istanti_cf: "CF Istanti",
     chiamati: "Chiamati",
+    chiamati_cf: "CF Chiamati",
     avvocati: "Avvocati",
     competenza: "Competenza",
     nota: "Nota",
@@ -81,6 +118,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   };
 
   const rows = items.map((m) => {
+    const medId = String(m.id);
     const istanti = m.istanti_testo ? String(m.istanti_testo) : "";
     const chiamati = m.chiamati_testo ? String(m.chiamati_testo) : "";
     const avvocati = m.avvocati_testo ? String(m.avvocati_testo) : "";
@@ -100,8 +138,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
         case "istanti":
           row[columnLabels.istanti] = istanti;
           break;
+        case "istanti_cf":
+          row[columnLabels.istanti_cf] = istantiCfMap.get(medId) ?? "";
+          break;
         case "chiamati":
           row[columnLabels.chiamati] = chiamati;
+          break;
+        case "chiamati_cf":
+          row[columnLabels.chiamati_cf] = chiamatiCfMap.get(medId) ?? "";
           break;
         case "avvocati":
           row[columnLabels.avvocati] = avvocati;
