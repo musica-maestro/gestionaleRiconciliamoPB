@@ -323,9 +323,9 @@ export async function action({ request, params }: ActionFunctionArgs) {
     const incontro_id = String(formData.get("incontro_id") ?? "");
     if (!incontro_id) return redirect(`/mediazioni/${id}?tab=incontri`);
     await pb.collection("incontri").update(incontro_id, {
-      data_programmazione: italianLocalToUTC(String(formData.get("data_programmazione") ?? "")),
-      report: String(formData.get("report") ?? "").trim() || undefined,
-      link_incontro: String(formData.get("link_incontro") ?? "").trim() || undefined,
+      data_programmazione: italianLocalToUTC(String(formData.get("data_programmazione") ?? "")) ?? null,
+      report: String(formData.get("report") ?? "").trim() || null,
+      link_incontro: String(formData.get("link_incontro") ?? "").trim() || null,
     });
     return redirect(`/mediazioni/${id}?tab=incontri`);
   } else if (intent === "delete_incontro") {
