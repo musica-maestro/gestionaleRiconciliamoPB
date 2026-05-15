@@ -425,7 +425,11 @@ export async function action({ request, params }: ActionFunctionArgs) {
     if (role !== "admin" && role !== "manager") {
       throw new Response("Forbidden", { status: 403 });
     }
-    await pb.collection("mediazioni").delete(id);
+    await pb.collection("mediazioni").update(id, {
+      is_deleted: true,
+      deleted_at: new Date().toISOString().replace("T", " ").slice(0, 19) + ".000Z",
+      deleted_by: user.id,
+    });
     return redirect("/mediazioni");
   }
   return redirect(`/mediazioni/${id}`);
