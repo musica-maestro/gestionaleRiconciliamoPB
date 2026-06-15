@@ -654,10 +654,8 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     id: d.id as string,
     tipo: (d.tipo as string) ?? "",
     descrizione: (d.descrizione as string) ?? "",
-    file: (d.file as string) ?? "",
-    file_url: d.file
-      ? pb.files.getUrl(d as never, d.file as string)
-      : "",
+    has_file: Boolean((d.file as string) ?? ""),
+    link_legacy: (d.link_legacy as string) ?? "",
   }));
 
   const documentiTipi = (documentiTipiResp as Record<string, unknown>[]).map((t) => ({
@@ -2537,14 +2535,24 @@ export default function MediazioneDetail() {
                       )}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      {d.file_url && (
+                      {d.has_file && (
                         <a
-                          href={d.file_url}
+                          href={`/mediazioni/${mediazione.id}/documenti/${d.id}/file`}
                           className="rounded border border-slate-300 px-2.5 py-1 text-[11px] sm:text-xs text-slate-700 hover:bg-slate-50"
                           target="_blank"
                           rel="noreferrer"
                         >
-                          Scarica
+                          Apri
+                        </a>
+                      )}
+                      {!d.has_file && d.link_legacy && (
+                        <a
+                          href={d.link_legacy}
+                          className="rounded border border-slate-300 px-2.5 py-1 text-[11px] sm:text-xs text-slate-700 hover:bg-slate-50"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Apri
                         </a>
                       )}
                       <Form method="post">
