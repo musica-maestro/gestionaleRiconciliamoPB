@@ -310,6 +310,11 @@ export async function action({ request, params }: ActionFunctionArgs) {
       tipologia: String(formData.get("tipologia") ?? "PEC"),
       nota: String(formData.get("nota") ?? "").trim() || undefined,
     });
+    // Convocazione = notifica alle parti → passa in Aperte
+    const stato = String((mediazione as { stato?: string }).stato ?? "");
+    if (stato === "da_notificare" || stato === "pianificata") {
+      await pb.collection("mediazioni").update(id, { stato: "aperta" });
+    }
     return redirect(`/mediazioni/${id}?tab=convocazioni`);
   } else if (intent === "add_incontro") {
     await pb.collection("incontri").create({
@@ -318,6 +323,11 @@ export async function action({ request, params }: ActionFunctionArgs) {
       report: String(formData.get("report") ?? "").trim() || undefined,
       link_incontro: String(formData.get("link_incontro") ?? "").trim() || undefined,
     });
+    // Primo incontro da Da pianificare → Da notificare
+    const stato = String((mediazione as { stato?: string }).stato ?? "");
+    if (stato === "assegnata" || stato === "") {
+      await pb.collection("mediazioni").update(id, { stato: "da_notificare" });
+    }
     return redirect(`/mediazioni/${id}?tab=incontri`);
   } else if (intent === "update_incontro") {
     const incontro_id = String(formData.get("incontro_id") ?? "");
@@ -650,18 +660,22 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     tessera: (a.numero_tessera_foro as string) || undefined,
   }));
 
-  const documenti = (documentiResp as Record<string, unknown>[]).map((d) => ({
-    id: d.id as string,
-    tipo: (d.tipo as string) ?? "",
-    descrizione: (d.descrizione as string) ?? "",
-    has_file: Boolean((d.file as string) ?? ""),
-    link_legacy: (d.link_legacy as string) ?? "",
-  }));
-
   const documentiTipi = (documentiTipiResp as Record<string, unknown>[]).map((t) => ({
     id: t.id as string,
     nome: (t.nome as string) ?? "",
   }));
+
+  const tipoNomeById = Object.fromEntries(documentiTipi.map((t) => [t.id, t.nome]));
+  const documenti = (documentiResp as Record<string, unknown>[]).map((d) => {
+    const tipoId = (d.tipo as string) ?? "";
+    return {
+      id: d.id as string,
+      tipo: tipoNomeById[tipoId] || tipoId || "",
+      descrizione: (d.descrizione as string) ?? "",
+      has_file: Boolean((d.file as string) ?? ""),
+      link_legacy: (d.link_legacy as string) ?? "",
+    };
+  });
 
   const scaglioniOpzioni = (scaglioniResp as Record<string, unknown>[]).map((r) => (r.nome as string) ?? "");
   const modalitaOpzioni = (modalitaResp as Record<string, unknown>[]).map((r) => (r.nome as string) ?? "");
@@ -685,6 +699,9 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     mediazione: {
       id: mediazione.id,
       rgm: mediazione.rgm ?? "",
+      codice_univoco_cliente: (mediazione as { codice_univoco_cliente?: string }).codice_univoco_cliente ?? "",
+      created: (mediazione as { created?: string }).created ?? null,
+      updated: (mediazione as { updated?: string }).updated ?? null,
       data_protocollo: mediazione.data_protocollo ?? null,
       oggetto: mediazione.oggetto ?? "",
       valore: mediazione.valore ?? "",
@@ -1853,6 +1870,14 @@ export default function MediazioneDetail() {
 
   const formatDate = (d: string | null) =>
     d ? new Date(d).toLocaleDateString("it-IT") : "—";
+  const formatDateTime = (d: string | null) =>
+    d
+      ? new Date(d).toLocaleString("it-IT", {
+          timeZone: "Europe/Rome",
+          dateStyle: "short",
+          timeStyle: "short",
+        })
+      : "—";
   const toInputDate = (d: string | null) =>
     d ? new Date(d).toISOString().slice(0, 10) : "";
 
@@ -1951,6 +1976,12 @@ export default function MediazioneDetail() {
                 <dd className="text-slate-900">{mediazione.rgm || "—"}</dd>
               </div>
               <div>
+                <dt className="font-medium text-slate-500 mb-0.5">Codice univoco cliente</dt>
+                <dd className="text-slate-900 font-mono text-xs sm:text-sm break-all">
+                  {mediazione.codice_univoco_cliente || "—"}
+                </dd>
+              </div>
+              <div>
                 <dt className="font-medium text-slate-500 mb-0.5">Data protocollo</dt>
                 <dd className="text-slate-900">{formatDate(mediazione.data_protocollo)}</dd>
               </div>
@@ -2001,6 +2032,14 @@ export default function MediazioneDetail() {
                 <dd className="text-slate-900 whitespace-pre-wrap max-h-40 overflow-auto text-xs sm:text-sm">
                   {mediazione.nota || "—"}
                 </dd>
+              </div>
+              <div>
+                <dt className="font-medium text-slate-500 mb-0.5">Creata il</dt>
+                <dd className="text-slate-900">{formatDateTime(mediazione.created)}</dd>
+              </div>
+              <div>
+                <dt className="font-medium text-slate-500 mb-0.5">Aggiornata il</dt>
+                <dd className="text-slate-900">{formatDateTime(mediazione.updated)}</dd>
               </div>
             </dl>
           ) : (

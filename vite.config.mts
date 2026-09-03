@@ -11,4 +11,8 @@ export default defineConfig({
   resolve: {
     alias: { "~": path.resolve(__dirname, "app") },
   },
+  server: {
+    port: Number(process.env.PORT) || 3002,
+    host: "127.0.0.1",
+  },
 });

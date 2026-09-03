@@ -12,6 +12,7 @@ export { SortLink, type SortLinkProps } from "./sort-link";
 
 export {
   FilterableTable,
+  useFilterFormId,
   filterableTableHeadClass,
   filterableTableThClass,
   filterableTableHeaderLabelClass,

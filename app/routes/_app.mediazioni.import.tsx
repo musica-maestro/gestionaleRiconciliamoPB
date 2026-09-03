@@ -16,7 +16,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const soggetti = await pb
     .collection("soggetti")
     .getFullList({
-      fields: "id,nome,cognome,codice_fiscale,indirizzo_riga_1,comune,provincia,cap",
+      fields: "id,nome,cognome,codice_fiscale,indirizzo_riga_1,comune,provincia,cap,ragione_sociale",
       sort: "cognome,nome",
     })
     .catch(() => []);
@@ -26,6 +26,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       nome?: string;
       cognome?: string;
       codice_fiscale?: string;
+      ragione_sociale?: string;
       indirizzo_riga_1?: string;
       comune?: string;
       provincia?: string;
@@ -96,15 +97,20 @@ function formatDateIT(value: string | null | undefined): string {
 
 type SoggettoMatch = { id: string; inDb: true } | { inDb: false };
 function matchSoggetto(
-  soggetti: Array<{ id: string; nome?: string; cognome?: string; codice_fiscale?: string }>,
+  soggetti: Array<{ id: string; nome?: string; cognome?: string; codice_fiscale?: string; ragione_sociale?: string }>,
   parte: { nome: string; cognome: string; codice_fiscale: string }
 ): SoggettoMatch {
   const cf = (parte.codice_fiscale || "").trim().toUpperCase();
-  if (cf) {
+  if (cf && !/^(N\.?D\.?|NA|\?+|X+)$/i.test(cf)) {
     const byCf = soggetti.find(
       (s) => (s.codice_fiscale || "").trim().toUpperCase() === cf
     );
     if (byCf) return { id: byCf.id, inDb: true };
+  }
+  const full = [parte.nome, parte.cognome].filter(Boolean).join(" ").trim().toLowerCase();
+  if (full) {
+    const byRs = soggetti.find((s) => (s.ragione_sociale || "").trim().toLowerCase() === full);
+    if (byRs) return { id: byRs.id, inDb: true };
   }
   const nome = (parte.nome || "").trim().toLowerCase();
   const cognome = (parte.cognome || "").trim().toLowerCase();

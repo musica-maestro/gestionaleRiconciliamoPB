@@ -5,6 +5,7 @@
  */
 
 import { useRef, useCallback } from "react";
+import { useFilterFormId } from "./filterable-table";
 
 const DEBOUNCE_MS = 400;
 
@@ -14,10 +15,6 @@ const inputClass =
 
 const selectClass =
   "select select-bordered select-sm w-full max-w-full bg-base-100 text-base-content " +
-  "border-2 border-base-300 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none";
-
-const dateInputClass =
-  "input input-bordered input-sm w-full min-w-0 bg-base-100 text-base-content " +
   "border-2 border-base-300 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none";
 
 const dateRangeInputClass =
@@ -43,6 +40,7 @@ export function FilterTextInput({
   type = "text",
   className = "",
 }: FilterTextInputProps) {
+  const formId = useFilterFormId();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -64,6 +62,7 @@ export function FilterTextInput({
     <input
       name={name}
       type={type}
+      form={formId}
       defaultValue={defaultValue}
       placeholder={placeholder}
       className={`${inputClass} ${className}`}
@@ -94,13 +93,15 @@ export function FilterSelect({
   emptyLabel = "Tutti",
   className = "",
 }: FilterSelectProps) {
+  const formId = useFilterFormId();
   const handleChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    submitFormFromInput(e.target);
+    submitFormFromInput(e.currentTarget);
   }, []);
 
   return (
     <select
       name={name}
+      form={formId}
       defaultValue={defaultValue}
       className={`${selectClass} ${className}`}
       onChange={handleChange}
@@ -134,8 +135,9 @@ export function FilterDateRange({
   labelTo = "A",
   className = "",
 }: FilterDateRangeProps) {
+  const formId = useFilterFormId();
   const handleDateChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    submitFormFromInput(e.target);
+    submitFormFromInput(e.currentTarget);
   }, []);
 
   return (
@@ -146,6 +148,7 @@ export function FilterDateRange({
         </span>
         <input
           name={nameFrom}
+          form={formId}
           type="date"
           defaultValue={valueFrom}
           className={dateRangeInputClass}
@@ -159,6 +162,7 @@ export function FilterDateRange({
         </span>
         <input
           name={nameTo}
+          form={formId}
           type="date"
           defaultValue={valueTo}
           className={dateRangeInputClass}

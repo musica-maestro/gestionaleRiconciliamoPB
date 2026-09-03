@@ -102,54 +102,107 @@ type AddrFields = {
   cap?: string;
 };
 
-/** Find soggetto by CF (or create). If found, patch empty fields from Excel. */
+/** Find soggetto by CF, P.IVA, ragione sociale, or nome+cognome. Avoid clones. */
 async function findOrCreateSoggetto(
   pb: PocketBase,
   parte: { nome: string; cognome: string; codice_fiscale: string },
-  addrFields: AddrFields
+  addrFields: AddrFields,
+  opts?: { preferGiuridica?: boolean; fullName?: string }
 ): Promise<string> {
-  const cf = (parte.codice_fiscale || "").trim().toUpperCase();
+  const cfRaw = (parte.codice_fiscale || "").trim().toUpperCase().replace(/\s+/g, "");
+  const junk = /^(N\.?D\.?|NA|N\/A|\?+|X+|-+)$/i.test(cfRaw);
+  const cf = !junk && (cfRaw.length === 16 || cfRaw.length === 11) ? cfRaw : "";
+  const full = (opts?.fullName || [parte.nome, parte.cognome].filter(Boolean).join(" ")).trim();
+  const giuridicaHint = /\b(s\.?\s?r\.?\s?l\.?|s\.?\s?p\.?\s?a\.?|srl|spa|snc|sas|societ)/i.test(full);
+  const giuridica = Boolean(opts?.preferGiuridica || giuridicaHint);
+
   if (cf) {
     const existing = await pb
       .collection("soggetti")
       .getFullList({
         filter: pb.filter("codice_fiscale = {:cf}", { cf }),
         limit: 1,
-        fields: "id,nome,cognome,codice_fiscale,indirizzo_riga_1,indirizzo_riga_2,numero_civico,comune,provincia,cap",
+        fields: "id,nome,cognome,codice_fiscale,ragione_sociale,indirizzo_riga_1,indirizzo_riga_2,numero_civico,comune,provincia,cap",
       })
       .catch(() => []);
     if (existing.length > 0) {
-      const s = existing[0] as Record<string, unknown>;
-      const id = s.id as string;
-      const updates: Record<string, unknown> = {};
-      if (!(s.nome as string)?.trim() && parte.nome) updates.nome = parte.nome;
-      if (!(s.cognome as string)?.trim() && parte.cognome) updates.cognome = parte.cognome;
-      if (!(s.indirizzo_riga_1 as string)?.trim() && addrFields.indirizzo_riga_1) updates.indirizzo_riga_1 = addrFields.indirizzo_riga_1;
-      if (!(s.indirizzo_riga_2 as string)?.trim() && addrFields.indirizzo_riga_2) updates.indirizzo_riga_2 = addrFields.indirizzo_riga_2;
-      if (!(s.numero_civico as string)?.trim() && addrFields.numero_civico) updates.numero_civico = addrFields.numero_civico;
-      if (!(s.comune as string)?.trim() && addrFields.comune) updates.comune = addrFields.comune;
-      if (!(s.provincia as string)?.trim() && addrFields.provincia) updates.provincia = addrFields.provincia;
-      if (!(s.cap as string)?.trim() && addrFields.cap) updates.cap = addrFields.cap;
-      if (Object.keys(updates).length > 0) {
-        await pb.collection("soggetti").update(id, updates);
-      }
-      return id;
+      return patchSoggetto(pb, existing[0] as Record<string, unknown>, parte, addrFields);
     }
   }
-  const created = await pb.collection("soggetti").create({
-    tipo: "Fisica",
-    nome: parte.nome || undefined,
-    cognome: parte.cognome || undefined,
-    codice_fiscale: parte.codice_fiscale || undefined,
+
+  if (giuridica && full) {
+    const existingRs = await pb
+      .collection("soggetti")
+      .getFullList({
+        filter: pb.filter("ragione_sociale = {:rs}", { rs: full }),
+        limit: 1,
+        fields: "id,nome,cognome,codice_fiscale,ragione_sociale,indirizzo_riga_1,indirizzo_riga_2,numero_civico,comune,provincia,cap",
+      })
+      .catch(() => []);
+    if (existingRs.length > 0) {
+      return patchSoggetto(pb, existingRs[0] as Record<string, unknown>, parte, addrFields);
+    }
+  }
+
+  const nome = (parte.nome || "").trim();
+  const cognome = (parte.cognome || "").trim();
+  if (nome && cognome) {
+    const existingName = await pb
+      .collection("soggetti")
+      .getFullList({
+        filter: pb.filter("nome = {:n} && cognome = {:c}", { n: nome, c: cognome }),
+        limit: 1,
+        fields: "id,nome,cognome,codice_fiscale,ragione_sociale,indirizzo_riga_1,indirizzo_riga_2,numero_civico,comune,provincia,cap",
+      })
+      .catch(() => []);
+    if (existingName.length > 0) {
+      return patchSoggetto(pb, existingName[0] as Record<string, unknown>, parte, addrFields);
+    }
+  }
+
+  const payload: Record<string, unknown> = {
     ...addrFields,
-  });
+  };
+  if (giuridica) {
+    payload.tipo = "Giuridica";
+    payload.ragione_sociale = full || undefined;
+    if (cf.length === 11) payload.piva = cf;
+  } else {
+    payload.tipo = "Fisica";
+    payload.nome = parte.nome || undefined;
+    payload.cognome = parte.cognome || undefined;
+  }
+  if (cf) payload.codice_fiscale = cf;
+  const created = await pb.collection("soggetti").create(payload);
   return created.id;
+}
+
+async function patchSoggetto(
+  pb: PocketBase,
+  s: Record<string, unknown>,
+  parte: { nome: string; cognome: string; codice_fiscale: string },
+  addrFields: AddrFields
+): Promise<string> {
+  const id = s.id as string;
+  const updates: Record<string, unknown> = {};
+  if (!(s.nome as string)?.trim() && parte.nome) updates.nome = parte.nome;
+  if (!(s.cognome as string)?.trim() && parte.cognome) updates.cognome = parte.cognome;
+  if (!(s.indirizzo_riga_1 as string)?.trim() && addrFields.indirizzo_riga_1) updates.indirizzo_riga_1 = addrFields.indirizzo_riga_1;
+  if (!(s.indirizzo_riga_2 as string)?.trim() && addrFields.indirizzo_riga_2) updates.indirizzo_riga_2 = addrFields.indirizzo_riga_2;
+  if (!(s.numero_civico as string)?.trim() && addrFields.numero_civico) updates.numero_civico = addrFields.numero_civico;
+  if (!(s.comune as string)?.trim() && addrFields.comune) updates.comune = addrFields.comune;
+  if (!(s.provincia as string)?.trim() && addrFields.provincia) updates.provincia = addrFields.provincia;
+  if (!(s.cap as string)?.trim() && addrFields.cap) updates.cap = addrFields.cap;
+  if (Object.keys(updates).length > 0) {
+    await pb.collection("soggetti").update(id, updates);
+  }
+  return id;
 }
 
 export async function importRows(
   pb: PocketBase,
   rows: ImportRow[],
-  userId: string,
+  _userId: string,
   userNameToId: Record<string, string>
 ): Promise<{ success: number; errors: { index: number; error: string }[] }> {
   const errors: { index: number; error: string }[] = [];
@@ -165,10 +218,12 @@ export async function importRows(
 
   for (const row of rows) {
     try {
+      // Only set mediatore when Excel has a resolvable name — never default to importer.
       const mediatoreId =
         row.mediazionePayload.mediatore && userNameToId[row.mediazionePayload.mediatore]
           ? userNameToId[row.mediazionePayload.mediatore]
-          : userId;
+          : undefined;
+      const stato = mediatoreId ? "assegnata" : "registrata";
 
       const mediazioneData: Record<string, unknown> = {
         rgm: row.mediazionePayload.rgm || undefined,
@@ -181,7 +236,8 @@ export async function importRows(
         nota: row.mediazionePayload.nota || undefined,
         data_deposito: row.mediazionePayload.data_deposito || undefined,
         data_protocollo: row.mediazionePayload.data_protocollo || undefined,
-        mediatore: mediatoreId,
+        stato,
+        ...(mediatoreId ? { mediatore: mediatoreId } : { mediatore: "" }),
       };
 
       let mediazioneId!: string;

@@ -1,5 +1,6 @@
 import { Link, Form, useLocation } from "@remix-run/react";
 import { useEffect, useRef } from "react";
+import { Bell } from "lucide-react";
 import type { PbUser } from "~/types";
 
 function navLinkClass(path: string, currentPath: string) {
@@ -7,7 +8,9 @@ function navLinkClass(path: string, currentPath: string) {
     path === "/dashboard"
       ? currentPath === "/dashboard"
       : currentPath === path || currentPath.startsWith(path + "/");
-  return isActive ? "btn btn-primary btn-sm m-2" : "btn btn-ghost btn-sm m-2";
+  return isActive
+    ? "btn btn-sm bg-primary/15 text-primary border-transparent hover:bg-primary/20"
+    : "btn btn-ghost btn-sm";
 }
 
 const ChevronDown = () => (
@@ -27,11 +30,13 @@ export function TopNav({
   avatarUrl,
   showFatture,
   showAdmin,
+  unreadNotifiche = 0,
 }: {
   user: PbUser;
   avatarUrl: string | null;
   showFatture: boolean;
   showAdmin: boolean;
+  unreadNotifiche?: number;
 }) {
   const { pathname } = useLocation();
   const mobileAdminRef = useRef<HTMLDetailsElement | null>(null);
@@ -128,7 +133,7 @@ export function TopNav({
         </Link>
       </div>
       <div className="navbar-center hidden lg:flex">
-        <ul className="menu menu-horizontal px-1">
+        <ul className="menu menu-horizontal px-1 gap-0.5">
           <li>
             <Link to="/dashboard" className={navLinkClass("/dashboard", pathname)}>
               Dashboard
@@ -176,10 +181,23 @@ export function TopNav({
           )}
         </ul>
       </div>
-      <div className="navbar-end gap-2">
+      <div className="navbar-end gap-1.5">
+        <Link
+          to="/notifiche"
+          className={`btn btn-ghost btn-sm btn-square relative ${pathname.startsWith("/notifiche") ? "bg-primary/15 text-primary" : ""}`}
+          aria-label="Notifiche"
+          title="Notifiche"
+        >
+          <Bell className="h-5 w-5" />
+          {unreadNotifiche > 0 && (
+            <span className="badge badge-error badge-xs absolute -top-0.5 -right-0.5 min-w-[1.1rem] h-4 px-1">
+              {unreadNotifiche > 99 ? "99+" : unreadNotifiche}
+            </span>
+          )}
+        </Link>
         <details ref={userMenuRef} className="dropdown dropdown-end">
           <summary
-            className={`btn btn-ghost btn-sm marker:content-none list-none flex items-center gap-1 ${pathname === "/settings" ? "btn-primary" : ""}`}
+            className={`btn btn-ghost btn-sm marker:content-none list-none flex items-center gap-1 ${pathname === "/settings" ? "bg-primary/15 text-primary" : ""}`}
           >
             {avatarUrl ? (
               <img

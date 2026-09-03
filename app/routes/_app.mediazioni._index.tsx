@@ -1,18 +1,18 @@
-import { useState } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Link, useLoaderData, useSearchParams, useNavigate, useFetcher } from "@remix-run/react";
-import { json, type LoaderFunctionArgs } from "@remix-run/node";
+import { json, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
 import type { MetaFunction } from "@remix-run/node";
 
 export const meta: MetaFunction = () => [{ title: "Mediazioni" }];
 import { getCurrentRole, requireUser } from "~/lib/auth.server";
 import { createPB } from "~/lib/pocketbase.server";
+import { callRiconciliamoApi } from "~/lib/riconciliamo-api.server";
 import {
   FilterableTable,
   FilterTextInput,
   FilterSelect,
   FilterDateRange,
   SortLink,
-  filterableTableHeadClass,
   filterableTableThClass,
   filterableTableHeaderLabelClass,
 } from "~/components/data-table";
@@ -20,12 +20,61 @@ import { ExportMediazioniDialog } from "~/components/export-mediazioni-dialog";
 import { ESITO_FINALE_FILTER_OPTIONS } from "~/lib/esito-finale";
 import { Eye, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from "lucide-react";
 const PER_PAGE_OPTIONS = [10, 25, 50, 100] as const;
-const SORT_FIELDS = ["rgm", "oggetto", "data_deposito", "data_protocollo", "data_chiusura", "esito_finale", "modalita_mediazione", "competenza", "mediatore_name"] as const;
-const MAIN_COLOR = "#3aaeba";
+const SORT_FIELDS = ["rgm", "oggetto", "data_deposito", "data_protocollo", "data_chiusura", "esito_finale", "modalita_mediazione", "competenza", "mediatore_name", "stato", "data_assegnazione"] as const;
+const TABS = ["da-assegnare", "da-pianificare", "da-notificare", "aperte", "chiuse"] as const;
+type Tab = (typeof TABS)[number];
+
+/** Chiusa = data chiusura + esito valorizzato (e non "In corso"). */
+const FILTER_CHIUSE =
+  `(data_chiusura != "" && data_chiusura != null && esito_finale != "" && esito_finale != null && esito_finale != "In corso")`;
+const FILTER_APERTE =
+  `(data_chiusura = "" || data_chiusura = null || esito_finale = "" || esito_finale = null || esito_finale = "In corso")`;
 
 function stripHtml(html: string): string {
   if (!html || typeof html !== "string") return "";
   return html.replace(/<[^>]*>/g, "").trim();
+}
+
+function tabBaseFilter(tab: Tab): string {
+  switch (tab) {
+    case "da-assegnare":
+      return `${FILTER_APERTE} && stato = "registrata"`;
+    case "da-pianificare":
+      return `${FILTER_APERTE} && stato = "assegnata"`;
+    case "da-notificare":
+      return `${FILTER_APERTE} && (stato = "da_notificare" || stato = "pianificata")`;
+    case "aperte":
+      return `${FILTER_APERTE} && stato = "aperta"`;
+    case "chiuse":
+      return FILTER_CHIUSE;
+  }
+}
+
+export async function action({ request }: ActionFunctionArgs) {
+  await requireUser(request);
+  const formData = await request.formData();
+  const intent = String(formData.get("intent") ?? "");
+  if (intent !== "assegna") {
+    return json({ error: "Intent non valido" }, 400);
+  }
+  const ids = String(formData.get("ids") ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const mode = String(formData.get("mode") ?? "one");
+  const mediatoreIds = String(formData.get("mediatoreIds") ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const res = await callRiconciliamoApi(request, "/api/riconciliamo/mediazioni/assegna", {
+    method: "POST",
+    body: JSON.stringify({ ids, mode, mediatoreIds }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return json({ error: (data as { message?: string }).message ?? "Assegnazione fallita" }, res.status);
+  }
+  return json({ ok: true, ...(data as object) });
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -34,7 +83,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const role = getCurrentRole(user);
   const canCreate = role === "admin" || role === "manager";
   const canDelete = role === "admin" || role === "manager";
+  const canAssign = canCreate;
   const url = new URL(request.url);
+
+  const tabParam = url.searchParams.get("tab")?.trim() ?? "aperte";
+  const tab: Tab = (TABS as readonly string[]).includes(tabParam) ? (tabParam as Tab) : "aperte";
+  // Mediatori cannot use da-assegnare
+  const effectiveTab: Tab =
+    tab === "da-assegnare" && !canAssign ? "aperte" : tab;
 
   const rgm = url.searchParams.get("rgm")?.trim() ?? "";
   const oggetto = url.searchParams.get("oggetto")?.trim() ?? "";
@@ -67,6 +123,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const filterParts: string[] = [];
   if (role === "mediatore") filterParts.push(`mediatore = "${user.id}"`);
+  filterParts.push(tabBaseFilter(effectiveTab));
   if (rgm) filterParts.push(pb.filter("rgm ~ {:rgm}", { rgm }));
   if (oggetto) filterParts.push(pb.filter("oggetto ~ {:oggetto}", { oggetto }));
   if (valore) filterParts.push(pb.filter("valore ~ {:valore}", { valore }));
@@ -86,15 +143,66 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (mediatore) filterParts.push(pb.filter("mediatore_name ~ {:mediatore}", { mediatore }));
   const filter = filterParts.length > 0 ? filterParts.join(" && ") : undefined;
 
-  const [result, modalitaList] = await Promise.all([
+  const roleScope = role === "mediatore" ? `mediatore = "${user.id}"` : "";
+  const countFilter = (tabKey: Tab) => {
+    const parts = [tabBaseFilter(tabKey)];
+    if (roleScope) parts.unshift(roleScope);
+    return parts.join(" && ");
+  };
+  // Parallel PB calls on one client need unique/null requestKey (SDK auto-cancel).
+  const noCancel = { requestKey: null } as const;
+
+  const [
+    result,
+    modalitaList,
+    mediatoriList,
+    countDaAssegnare,
+    countDaPianificare,
+    countDaNotificare,
+    countAperte,
+  ] = await Promise.all([
     pb.collection("mediazioni_view").getList(page, perPage, {
       sort,
+      ...noCancel,
       ...(filter && { filter }),
     }),
     pb
       .collection("modalita_opzioni")
-      .getFullList({ filter: "attivo = true", sort: "nome" })
+      .getFullList({ filter: "attivo = true", sort: "nome", ...noCancel })
       .catch(() => []),
+    canAssign
+      ? pb
+          .collection("users")
+          .getFullList({
+            filter: 'ruolo_corrente = "mediatore" || ruoli ?~ "mediatore"',
+            fields: "id,name,email,ruolo_corrente,stato",
+            sort: "name",
+            ...noCancel,
+          })
+          .catch(() => [])
+      : Promise.resolve([]),
+    canAssign
+      ? pb
+          .collection("mediazioni_view")
+          .getList(1, 1, { filter: countFilter("da-assegnare"), ...noCancel })
+          .then((r) => r.totalItems ?? 0)
+          .catch(() => 0)
+      : Promise.resolve(0),
+    pb
+      .collection("mediazioni_view")
+      .getList(1, 1, { filter: countFilter("da-pianificare"), ...noCancel })
+      .then((r) => r.totalItems ?? 0)
+      .catch(() => 0),
+    pb
+      .collection("mediazioni_view")
+      .getList(1, 1, { filter: countFilter("da-notificare"), ...noCancel })
+      .then((r) => r.totalItems ?? 0)
+      .catch(() => 0),
+    pb
+      .collection("mediazioni_view")
+      .getList(1, 1, { filter: countFilter("aperte"), ...noCancel })
+      .then((r) => r.totalItems ?? 0)
+      .catch(() => 0),
   ]);
 
   const mediazioni = result.items.map((m) => ({
@@ -104,6 +212,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     valore: String(m.valore ?? "—"),
     modalita_mediazione: String(m.modalita_mediazione ?? "—"),
     esito_finale: String(m.esito_finale ?? "—"),
+    stato: String((m as { stato?: string }).stato ?? "—"),
     data_deposito: m.data_deposito ? String(m.data_deposito) : null,
     data_protocollo: m.data_protocollo ? String(m.data_protocollo) : null,
     data_chiusura: m.data_chiusura ? String(m.data_chiusura) : null,
@@ -116,11 +225,24 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }));
 
   const modalitaOptions = (modalitaList as { nome: string }[]).map((o) => ({ value: o.nome, label: o.nome }));
+  const mediatori = (mediatoriList as { id: string; name?: string; email?: string; stato?: string }[])
+    .filter((u) => String(u.stato ?? "").toLowerCase() !== "false" && String(u.stato ?? "") !== "inattivo")
+    .map((u) => ({ id: u.id, name: u.name || u.email || u.id }));
 
   return json({
     mediazioni,
     canCreate,
     canDelete,
+    canAssign,
+    tab: effectiveTab,
+    role: role ?? "",
+    mediatori,
+    tabCounts: {
+      "da-assegnare": countDaAssegnare,
+      "da-pianificare": countDaPianificare,
+      "da-notificare": countDaNotificare,
+      aperte: countAperte,
+    },
     filters: {
       rgm,
       oggetto,
@@ -223,13 +345,89 @@ function filtersRecordFromLoader(filters: {
 }
 
 export default function MediazioniList() {
-  const { mediazioni, filters, sortField, order, page, perPage, totalPages, totalItems, modalitaOptions, canDelete, canCreate } = useLoaderData<typeof loader>();
+  const {
+    mediazioni,
+    filters,
+    sortField,
+    order,
+    page,
+    perPage,
+    totalPages,
+    totalItems,
+    modalitaOptions,
+    canDelete,
+    canCreate,
+    canAssign,
+    tab,
+    mediatori,
+    tabCounts,
+  } = useLoaderData<typeof loader>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const fetcher = useFetcher();
+  const assignFetcher = useFetcher<typeof action>();
+  const selectionIdsFetcher = useFetcher<{ ids?: string[]; error?: string }>();
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [lastClickedIndex, setLastClickedIndex] = useState<number | null>(null);
+  const [assignMode, setAssignMode] = useState<"one" | "distribute">("one");
+  const [mediatoreOne, setMediatoreOne] = useState("");
+  const [mediatoreMulti, setMediatoreMulti] = useState<string[]>([]);
+  const headerCheckboxRef = useRef<HTMLInputElement>(null);
+  const pendingSelectionKeyRef = useRef<string | null>(null);
+  const lastLoadedSelectionKeyRef = useRef<string | null>(null);
 
-  const hiddenFields: Record<string, string> = { sort: sortField, order, per_page: String(perPage), page: "1" };
+  const pageIds = useMemo(() => mediazioni.map((m) => m.id), [mediazioni]);
+
+  // Stable key for current filters (ignore pagination). Reset selection when it changes.
+  const selectionFilterKey = useMemo(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("page");
+    next.delete("per_page");
+    next.set("tab", "da-assegnare");
+    return next.toString();
+  }, [searchParams]);
+
+  useEffect(() => {
+    setSelectedIds([]);
+    setLastClickedIndex(null);
+    pendingSelectionKeyRef.current = null;
+    lastLoadedSelectionKeyRef.current = null;
+  }, [selectionFilterKey]);
+
+  useEffect(() => {
+    setLastClickedIndex(null);
+  }, [page]);
+
+  useEffect(() => {
+    if (!selectionIdsFetcher.data?.ids) return;
+    if (pendingSelectionKeyRef.current !== selectionFilterKey) return;
+    pendingSelectionKeyRef.current = null;
+    lastLoadedSelectionKeyRef.current = selectionFilterKey;
+    setSelectedIds(selectionIdsFetcher.data.ids);
+  }, [selectionIdsFetcher.data, selectionFilterKey]);
+
+  const allCurrentPageSelected =
+    pageIds.length > 0 && pageIds.every((id) => selectedIds.includes(id));
+  const allListSelected = totalItems > 0 && selectedIds.length === totalItems;
+  const headerCheckboxChecked = allCurrentPageSelected || allListSelected;
+  const isSelectionIdsLoading =
+    selectionIdsFetcher.state === "loading" || selectionIdsFetcher.state === "submitting";
+
+  useEffect(() => {
+    const checkbox = headerCheckboxRef.current;
+    if (!checkbox) return;
+    checkbox.indeterminate =
+      selectedIds.length > 0 && !allCurrentPageSelected && !allListSelected;
+  }, [selectedIds.length, allCurrentPageSelected, allListSelected]);
+
+  const hiddenFields: Record<string, string> = {
+    sort: sortField,
+    order,
+    per_page: String(perPage),
+    page: "1",
+    tab,
+  };
 
   function handleDelete(id: string) {
     fetcher.submit(
@@ -238,20 +436,99 @@ export default function MediazioniList() {
     );
   }
 
+  function tabUrl(nextTab: Tab) {
+    const next = new URLSearchParams(searchParams);
+    next.set("tab", nextTab);
+    next.set("page", "1");
+    return `/mediazioni?${next.toString()}`;
+  }
+
+  function handleRowSelect(id: string, index: number, shiftKey: boolean) {
+    if (shiftKey && lastClickedIndex !== null) {
+      const start = Math.min(lastClickedIndex, index);
+      const end = Math.max(lastClickedIndex, index);
+      setSelectedIds((prev) => Array.from(new Set([...prev, ...pageIds.slice(start, end + 1)])));
+    } else {
+      setSelectedIds((prev) =>
+        prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+      );
+      setLastClickedIndex(index);
+    }
+  }
+
+  /** 1° pagina · 2° lista filtrata · 3° reset */
+  function handleCycleSelection() {
+    if (allListSelected) {
+      setSelectedIds([]);
+      setLastClickedIndex(null);
+      return;
+    }
+
+    if (allCurrentPageSelected) {
+      if (
+        selectionIdsFetcher.data?.ids &&
+        lastLoadedSelectionKeyRef.current === selectionFilterKey &&
+        !selectionIdsFetcher.data.error
+      ) {
+        setSelectedIds(selectionIdsFetcher.data.ids);
+        return;
+      }
+      pendingSelectionKeyRef.current = selectionFilterKey;
+      selectionIdsFetcher.load(`/mediazioni/selection-ids?${selectionFilterKey}`);
+      return;
+    }
+
+    setSelectedIds([...pageIds]);
+    setLastClickedIndex(null);
+  }
+
+  function submitAssign() {
+    if (selectedIds.length === 0) return;
+    const mediatoreIds =
+      assignMode === "one" ? (mediatoreOne ? [mediatoreOne] : []) : mediatoreMulti;
+    if (mediatoreIds.length === 0) return;
+    assignFetcher.submit(
+      {
+        intent: "assegna",
+        ids: selectedIds.join(","),
+        mode: assignMode,
+        mediatoreIds: mediatoreIds.join(","),
+      },
+      { method: "post" }
+    );
+    setSelectedIds([]);
+    setLastClickedIndex(null);
+  }
+
   const cellTruncate = "align-top";
   const headerBgSolid = "bg-base-200";
   const [expandedNota, setExpandedNota] = useState<Set<string>>(new Set());
-  const zebraEven = { backgroundColor: `${MAIN_COLOR}08` };
+  const zebraEven = { backgroundColor: "color-mix(in oklab, var(--color-primary, #3aaeba) 6%, transparent)" };
+  const showCheckboxes = canAssign && tab === "da-assegnare";
+  const colSpan = showCheckboxes ? 15 : 14;
+
+  const tabItems: { id: Tab; label: string; count?: number; show?: boolean }[] = [
+    { id: "da-assegnare", label: "Da assegnare", count: tabCounts["da-assegnare"], show: canAssign },
+    { id: "da-pianificare", label: "Da pianificare", count: tabCounts["da-pianificare"], show: true },
+    { id: "da-notificare", label: "Da notificare", count: tabCounts["da-notificare"], show: true },
+    { id: "aperte", label: "Aperte", count: tabCounts.aperte, show: true },
+    { id: "chiuse", label: "Chiuse", show: true },
+  ];
 
   return (
-    <div>
-      <div className="flex items-center justify-between gap-4 mb-4">
-        <h1 className="text-2xl font-semibold text-base-content shrink-0">Mediazioni</h1>
-        <div className="flex items-center gap-4 flex-shrink-0">
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold text-base-content">Mediazioni</h1>
+          <p className="text-sm text-base-content/60 mt-0.5">
+            Code di lavoro, pratiche aperte e storico chiusure.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           <button
             type="button"
-            onClick={() => navigate("/mediazioni")}
-            className="btn btn-soft btn-sm"
+            onClick={() => navigate(`/mediazioni?tab=${tab}`)}
+            className="btn btn-ghost btn-sm"
           >
             Azzera filtri
           </button>
@@ -262,26 +539,201 @@ export default function MediazioniList() {
               e.stopPropagation();
               setExportDialogOpen(true);
             }}
-            className="btn btn-warning btn-sm"
+            className="btn btn-outline btn-sm"
           >
             Esporta
           </button>
           {canCreate && (
-            <>
-              <Link to="/mediazioni/import" className="btn btn-ghost btn-sm">
-                Importa mediazioni
-              </Link>
-              <Link to="/mediazioni/chiudi" className="btn btn-ghost btn-sm">
-                Chiudi mediazioni
-              </Link>
-              <span className="hidden sm:inline w-px h-6 bg-base-300 rounded" aria-hidden />
-              <Link to="/mediazioni/new" className="btn btn-primary btn-sm">
-                Nuova mediazione
-              </Link>
-            </>
+            <div className="dropdown dropdown-end">
+              <button type="button" tabIndex={0} className="btn btn-ghost btn-sm">
+                Azioni
+                <ChevronDown className="h-4 w-4 opacity-70" />
+              </button>
+              <ul
+                tabIndex={0}
+                className="dropdown-content menu menu-sm z-20 mt-1 w-52 rounded-box border border-base-300 bg-base-100 p-2 shadow"
+              >
+                <li>
+                  <Link to="/mediazioni/import">Importa Excel</Link>
+                </li>
+                <li>
+                  <Link to="/mediazioni/import-zip">Importa zip</Link>
+                </li>
+                <li>
+                  <Link to="/mediazioni/chiudi">Chiudi mediazioni</Link>
+                </li>
+              </ul>
+            </div>
+          )}
+          {canCreate && (
+            <Link to="/mediazioni/new" className="btn btn-primary btn-sm">
+              Nuova mediazione
+            </Link>
           )}
         </div>
       </div>
+
+      <div className="flex flex-wrap items-center justify-center gap-3">
+        <nav
+          className="flex overflow-x-auto rounded-lg border border-base-300 bg-base-200/50 p-1"
+          aria-label="Stato mediazioni"
+          role="tablist"
+        >
+          {tabItems
+            .filter((t) => t.show)
+            .map((t) => {
+              const active = tab === t.id;
+              const count = t.count;
+              return (
+                <Link
+                  key={t.id}
+                  role="tab"
+                  aria-selected={active}
+                  to={tabUrl(t.id)}
+                  className={`btn btn-sm flex-shrink-0 gap-1.5 rounded-md px-3 ${
+                    active ? "btn-primary" : "btn-ghost"
+                  }`}
+                >
+                  {t.label}
+                  {typeof count === "number" && (
+                    <span
+                      className={`badge badge-sm tabular-nums ${
+                        active
+                          ? "badge-primary-content/20 bg-white/20 text-primary-content border-0"
+                          : count > 0
+                            ? "badge-primary"
+                            : "badge-ghost opacity-60"
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  )}
+                </Link>
+              );
+            })}
+        </nav>
+        {tab === "da-pianificare" && (
+          <Link to="/mediazioni/pianifica" className="btn btn-outline btn-sm btn-primary">
+            Pianifica incontri
+          </Link>
+        )}
+      </div>
+
+      {showCheckboxes && (
+        <div className="rounded-lg border border-base-300 bg-base-100 p-3 sm:p-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-sm font-medium text-base-content">
+                {selectedIds.length === 0
+                  ? "Nessuna selezione"
+                  : `${selectedIds.length} selezionate${
+                      allListSelected ? ` / ${totalItems}` : ""
+                    }`}
+                {isSelectionIdsLoading ? "…" : ""}
+              </p>
+              <p className="text-xs text-base-content/55 mt-0.5">
+                Checkbox testata: pagina → tutti → nessuno
+                {selectionIdsFetcher.data?.error
+                  ? ` · ${selectionIdsFetcher.data.error}`
+                  : ""}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="join">
+                <button
+                  type="button"
+                  className={`btn btn-sm join-item ${assignMode === "one" ? "btn-primary" : "btn-ghost"}`}
+                  onClick={() => setAssignMode("one")}
+                >
+                  A uno
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-sm join-item ${assignMode === "distribute" ? "btn-primary" : "btn-ghost"}`}
+                  onClick={() => setAssignMode("distribute")}
+                >
+                  Distribuisci
+                </button>
+              </div>
+              {assignMode === "one" ? (
+                <select
+                  className="select select-bordered select-sm min-w-[11rem]"
+                  value={mediatoreOne}
+                  onChange={(e) => setMediatoreOne(e.target.value)}
+                  aria-label="Mediatore"
+                >
+                  <option value="">Mediatore…</option>
+                  {mediatori.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="dropdown dropdown-end">
+                  <button type="button" tabIndex={0} className="btn btn-sm btn-outline min-w-[11rem] justify-between">
+                    {mediatoreMulti.length === 0
+                      ? "Mediatori…"
+                      : `${mediatoreMulti.length} mediatori`}
+                    <ChevronDown className="h-3.5 w-3.5 opacity-60" />
+                  </button>
+                  <ul
+                    tabIndex={0}
+                    className="dropdown-content menu menu-sm z-20 mt-1 w-56 rounded-box border border-base-300 bg-base-100 p-2 shadow max-h-56 overflow-y-auto"
+                  >
+                    {mediatori.map((m) => {
+                      const checked = mediatoreMulti.includes(m.id);
+                      return (
+                        <li key={m.id}>
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              className="checkbox checkbox-xs"
+                              checked={checked}
+                              onChange={() => {
+                                setMediatoreMulti((prev) =>
+                                  checked ? prev.filter((id) => id !== m.id) : [...prev, m.id],
+                                );
+                              }}
+                            />
+                            <span className="truncate">{m.name}</span>
+                          </label>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={
+                  selectedIds.length === 0 ||
+                  assignFetcher.state !== "idle" ||
+                  (assignMode === "one" ? !mediatoreOne : mediatoreMulti.length === 0)
+                }
+                onClick={submitAssign}
+              >
+                {assignFetcher.state !== "idle" ? "Assegnazione…" : "Assegna"}
+              </button>
+            </div>
+          </div>
+          {assignFetcher.data && "ok" in assignFetcher.data && (
+            <div className="alert alert-success py-2 text-sm">
+              Assegnate {(assignFetcher.data as { assigned?: number }).assigned ?? 0}
+            </div>
+          )}
+          {assignFetcher.data && "error" in assignFetcher.data && (
+            <div className="alert alert-error py-2 text-sm">
+              {String((assignFetcher.data as { error?: string }).error)}
+            </div>
+          )}
+          {mediatori.length === 0 && (
+            <div className="alert alert-warning py-2 text-sm">Nessun utente con ruolo mediatore.</div>
+          )}
+        </div>
+      )}
+
       <ExportMediazioniDialog
         isOpen={exportDialogOpen}
         onClose={() => setExportDialogOpen(false)}
@@ -375,6 +827,20 @@ export default function MediazioniList() {
           <table className="table table-sm w-full min-w-[1500px] [&_td]:align-top">
             <thead className={`sticky top-0 z-10 shadow-sm ${headerBgSolid}`}>
               <tr>
+                {showCheckboxes && (
+                  <th className={`${filterableTableThClass} w-10`}>
+                    <input
+                      ref={headerCheckboxRef}
+                      type="checkbox"
+                      className="checkbox checkbox-sm"
+                      checked={headerCheckboxChecked}
+                      disabled={isSelectionIdsLoading || pageIds.length === 0}
+                      onChange={handleCycleSelection}
+                      title="1 click: pagina · 2 click: tutti · 3 click: deseleziona"
+                      aria-label="Seleziona pagina, poi tutti, poi deseleziona"
+                    />
+                  </th>
+                )}
                 <th className={`${filterableTableThClass} min-w-[90px]`}>
                   <div className={filterableTableHeaderLabelClass}>
                     <SortLink label="RGM" field="rgm" currentSort={sortField} currentOrder={order} searchParams={searchParams} />
@@ -459,13 +925,26 @@ export default function MediazioniList() {
             <tbody>
               {mediazioni.length === 0 ? (
                 <tr>
-                  <td colSpan={14} className="text-center text-base-content/70 py-12">
+                  <td colSpan={colSpan} className="text-center text-base-content/70 py-12">
                     Nessuna mediazione trovata.
                   </td>
                 </tr>
               ) : (
                 mediazioni.map((m, idx) => (
                   <tr key={m.id} className="hover" style={idx % 2 === 1 ? zebraEven : undefined}>
+                    {showCheckboxes && (
+                      <td className="py-2">
+                        <input
+                          type="checkbox"
+                          className="checkbox checkbox-sm"
+                          checked={selectedIds.includes(m.id)}
+                          onChange={(e) =>
+                            handleRowSelect(m.id, idx, e.nativeEvent.shiftKey)
+                          }
+                          aria-label={`Seleziona ${m.rgm}`}
+                        />
+                      </td>
+                    )}
                     <td className="py-2">
                       <span className="font-medium truncate block max-w-[90px]">{m.rgm}</span>
                     </td>
