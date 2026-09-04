@@ -9,8 +9,49 @@
   --color-accent: #3aaeba;
   --color-accent-content: #ffffff;
 }
+@plugin "daisyui/theme" {
+  name: "dark";
+  color-scheme: dark;
+  --color-primary: #3aaeba;
+  --color-primary-content: #ffffff;
+  --color-accent: #3aaeba;
+  --color-accent-content: #ffffff;
+  --color-base-100: #1e1f20;
+  --color-base-200: #131314;
+  --color-base-300: #2d2e30;
+  --color-base-content: #e3e3e3;
+}
 
 @layer base {
+  :root,
+  [data-theme="light"] {
+    --cal-bg: #ffffff;
+    --cal-bg-subtle: #f8f9fa;
+    --cal-border: #dadce0;
+    --cal-text: #3c4043;
+    --cal-muted: #70757a;
+    --cal-accent: #1a73e8;
+    --cal-accent-soft: #e8f0fe;
+    --cal-accent-on: #ffffff;
+    --cal-hover: #f1f3f4;
+    --cal-now: #ea4335;
+    --cal-chip: #e8f0fe;
+  }
+
+  [data-theme="dark"] {
+    --cal-bg: #131314;
+    --cal-bg-subtle: #1e1f20;
+    --cal-border: #3c4043;
+    --cal-text: #e3e3e3;
+    --cal-muted: #9aa0a6;
+    --cal-accent: #a8c7fa;
+    --cal-accent-soft: #2d2e30;
+    --cal-accent-on: #062e6f;
+    --cal-hover: #2d2e30;
+    --cal-now: #f28b82;
+    --cal-chip: #2d2e30;
+  }
+
   body {
     font-family: 'Poppins', sans-serif;
   }

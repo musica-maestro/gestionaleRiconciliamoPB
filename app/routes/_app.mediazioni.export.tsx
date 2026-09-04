@@ -99,6 +99,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const columnLabels: Record<string, string> = {
     rgm: "RGM",
     oggetto: "Oggetto",
+    materia_altro: "Materia (altro)",
     valore: "Valore",
     istanti: "Istanti",
     istanti_cf: "CF Istanti",
@@ -112,6 +113,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     modalita_convocazione: "Modalità convocazione",
     mediatore_name: "Mediatore",
     esito_finale: "Esito",
+    trasmessa: "Trasmessa",
+    proposta_mediatore: "Proposta mediatore",
+    numero_esonerati_gratuito_patrocinio: "N. esonerati GP",
     data_protocollo: "Data protocollo",
     data_chiusura: "Data chiusura",
     data_avvio_entro: "Data avvio entro",
@@ -131,6 +135,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
           break;
         case "oggetto":
           row[columnLabels.oggetto] = String(m.oggetto ?? "");
+          break;
+        case "materia_altro":
+          row[columnLabels.materia_altro] = String((m as { materia_altro?: string }).materia_altro ?? "");
           break;
         case "valore":
           row[columnLabels.valore] = String(m.valore ?? "");
@@ -170,6 +177,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
           break;
         case "esito_finale":
           row[columnLabels.esito_finale] = String(m.esito_finale ?? "");
+          break;
+        case "trasmessa":
+          row[columnLabels.trasmessa] = (m as { trasmessa?: boolean }).trasmessa ? "Sì" : "No";
+          break;
+        case "proposta_mediatore":
+          row[columnLabels.proposta_mediatore] = (m as { proposta_mediatore?: boolean }).proposta_mediatore ? "Sì" : "No";
+          break;
+        case "numero_esonerati_gratuito_patrocinio":
+          row[columnLabels.numero_esonerati_gratuito_patrocinio] = String(
+            (m as { numero_esonerati_gratuito_patrocinio?: number }).numero_esonerati_gratuito_patrocinio ?? 0
+          );
           break;
         case "data_protocollo":
           row[columnLabels.data_protocollo] = m.data_protocollo ? String(m.data_protocollo) : "";

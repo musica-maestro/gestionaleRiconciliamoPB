@@ -17,9 +17,15 @@ importers:
       '@remix-run/serve':
         specifier: ^2.15.0
         version: 2.17.4(typescript@5.9.3)
+      '@tailwindcss/oxide-darwin-arm64':
+        specifier: ^4.3.3
+        version: 4.3.3
       daisyui:
         specifier: ^5.5.19
         version: 5.5.19
+      docx-templates:
+        specifier: ^4.15.0
+        version: 4.15.0
       jszip:
         specifier: ^3.10.1
         version: 3.10.1
@@ -921,6 +927,12 @@ packages:
     cpu: [arm64]
     os: [darwin]
 
+  '@tailwindcss/oxide-darwin-arm64@4.3.3':
+    resolution: {integrity: sha512-BiaWatpBcERQFDlOjRDpIVXuFK5PJez5SA4JMg6VYZdBYU+qKfV/vqjcIs+IYmtitf1xYQZTwXvU/8y4lfZUGw==}
+    engines: {node: '>= 20'}
+    cpu: [arm64]
+    os: [darwin]
+
   '@tailwindcss/oxide-darwin-x64@4.2.1':
     resolution: {integrity: sha512-/f/ozlaXGY6QLbpvd/kFTro2l18f7dHKpB+ieXz+Cijl4Mt9AI2rTrpq7V+t04nK+j9XBQHnSMdeQRhbGyt6fw==}
     engines: {node: '>= 20'}
@@ -1473,6 +1485,10 @@ packages:
   diff@5.2.2:
     resolution: {integrity: sha512-vtcDfH3TOjP8UekytvnHH1o1P4FcUdt4eQ1Y+Abap1tk/OB2MWQvcwS2ClCd1zuIhc3JKOx6p3kod8Vfys3E+A==}
     engines: {node: '>=0.3.1'}
+
+  docx-templates@4.15.0:
+    resolution: {integrity: sha512-H0JEDFVCF5j64Do9fqHVWwF86MOWUnHhQ2dfGWy7C2o9yPwtbCT1pXpotE6165Px07fia1Ted1Xh1fj1UZ9u1g==}
+    engines: {node: '>=6'}
 
   dotenv@16.6.1:
     resolution: {integrity: sha512-uBq4egWHTcTt33a72vpSG0z3HnPuIl6NqYcTrKEg2azoEyl2hpW0zqlxysq2pK9HlDIHyHyakeYaYnSAwd8bow==}
@@ -2712,6 +2728,9 @@ packages:
 
   safer-buffer@2.1.2:
     resolution: {integrity: sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg==}
+
+  sax@1.3.0:
+    resolution: {integrity: sha512-0s+oAmw9zLl1V1cS9BtZN7JAd0cW5e0QH4W3LWEK6a4LaLEA2OTpGYWDY+6XasBLtz6wkm3u1xRw95mRuJ59WA==}
 
   scheduler@0.23.2:
     resolution: {integrity: sha512-UOShsPwz7NrMUqhR6t0hWjFduvOzbtv7toDH1/hIrfRNIDBnnBWd0CwJTGvTpngVlmwGCdP9/Zl/tVrDqcuYzQ==}
@@ -3974,6 +3993,8 @@ snapshots:
   '@tailwindcss/oxide-darwin-arm64@4.2.1':
     optional: true
 
+  '@tailwindcss/oxide-darwin-arm64@4.3.3': {}
+
   '@tailwindcss/oxide-darwin-x64@4.2.1':
     optional: true
 
@@ -4494,6 +4515,11 @@ snapshots:
   detect-libc@2.1.2: {}
 
   diff@5.2.2: {}
+
+  docx-templates@4.15.0:
+    dependencies:
+      jszip: 3.10.1
+      sax: 1.3.0
 
   dotenv@16.6.1: {}
 
@@ -6007,6 +6033,8 @@ snapshots:
       is-regex: 1.2.1
 
   safer-buffer@2.1.2: {}
+
+  sax@1.3.0: {}
 
   scheduler@0.23.2:
     dependencies:

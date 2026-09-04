@@ -16,16 +16,29 @@ export async function loader({ request }: LoaderFunctionArgs) {
   });
 
   return json({
-    items: result.items.map((n) => ({
-      id: String(n.id),
-      tipo: String(n.tipo ?? ""),
-      messaggio: String(n.messaggio ?? ""),
-      dettaglio: n.dettaglio ? String(n.dettaglio) : "",
-      letto: Boolean(n.letto),
-      count: typeof n.count === "number" ? n.count : Number(n.count ?? 0),
-      created: n.created ? String(n.created) : "",
-    })),
+    items: result.items.map((n) => {
+      const mediazioni = Array.isArray(n.mediazioni)
+        ? (n.mediazioni as unknown[]).map((id) => String(id)).filter(Boolean)
+        : [];
+      return {
+        id: String(n.id),
+        tipo: String(n.tipo ?? ""),
+        messaggio: String(n.messaggio ?? ""),
+        dettaglio: n.dettaglio ? String(n.dettaglio) : "",
+        letto: Boolean(n.letto),
+        count: typeof n.count === "number" ? n.count : Number(n.count ?? 0),
+        created: n.created ? String(n.created) : "",
+        mediazioni,
+      };
+    }),
   });
+}
+
+function notificationHref(n: { tipo: string; mediazioni: string[] }) {
+  if (n.tipo === "adesione" && n.mediazioni[0]) {
+    return `/mediazioni/${n.mediazioni[0]}`;
+  }
+  return "/mediazioni?tab=da-pianificare";
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -107,7 +120,7 @@ export default function NotifichePage() {
                   </div>
                   <div className="flex flex-col gap-1 items-end">
                     <Link
-                      to="/mediazioni?tab=da-pianificare"
+                      to={notificationHref(n)}
                       className="btn btn-primary btn-xs"
                       onClick={() =>
                         fetcher.submit(

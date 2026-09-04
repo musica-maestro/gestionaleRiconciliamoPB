@@ -6,6 +6,7 @@ import {
   Scripts,
   ScrollRestoration,
 } from "@remix-run/react";
+import { THEME_BOOT_SCRIPT } from "~/components/theme-toggle";
 
 import "./tailwind.css";
 
@@ -18,12 +19,13 @@ export const links: LinksFunction = () => [
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="it" data-theme="light">
+    <html lang="it" data-theme="light" suppressHydrationWarning>
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
         <Links />
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet" />

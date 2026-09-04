@@ -2,12 +2,22 @@ import { Link, Form, useLocation } from "@remix-run/react";
 import { useEffect, useRef } from "react";
 import { Bell } from "lucide-react";
 import type { PbUser } from "~/types";
+import { ThemeToggle } from "~/components/theme-toggle";
 
 function navLinkClass(path: string, currentPath: string) {
-  const isActive =
-    path === "/dashboard"
-      ? currentPath === "/dashboard"
-      : currentPath === path || currentPath.startsWith(path + "/");
+  let isActive: boolean;
+  if (path === "/dashboard") {
+    isActive = currentPath === "/dashboard";
+  } else if (path === "/mediazioni") {
+    // Keep Calendario as its own nav item
+    isActive =
+      (currentPath === "/mediazioni" || currentPath.startsWith("/mediazioni/")) &&
+      !currentPath.startsWith("/mediazioni/calendario");
+  } else if (path === "/mediazioni/calendario") {
+    isActive = currentPath.startsWith("/mediazioni/calendario");
+  } else {
+    isActive = currentPath === path || currentPath.startsWith(path + "/");
+  }
   return isActive
     ? "btn btn-sm bg-primary/15 text-primary border-transparent hover:bg-primary/20"
     : "btn btn-ghost btn-sm";
@@ -90,6 +100,14 @@ export function TopNav({
               </Link>
             </li>
             <li>
+              <Link
+                to="/mediazioni/calendario"
+                className={navLinkClass("/mediazioni/calendario", pathname)}
+              >
+                Calendario
+              </Link>
+            </li>
+            <li>
               <Link to="/rubrica" className={navLinkClass("/rubrica", pathname)}>
                 Rubrica
               </Link>
@@ -145,6 +163,14 @@ export function TopNav({
             </Link>
           </li>
           <li>
+            <Link
+              to="/mediazioni/calendario"
+              className={navLinkClass("/mediazioni/calendario", pathname)}
+            >
+              Calendario
+            </Link>
+          </li>
+          <li>
             <Link to="/rubrica" className={navLinkClass("/rubrica", pathname)}>
               Rubrica
             </Link>
@@ -182,6 +208,7 @@ export function TopNav({
         </ul>
       </div>
       <div className="navbar-end gap-1.5">
+        <ThemeToggle />
         <Link
           to="/notifiche"
           className={`btn btn-ghost btn-sm btn-square relative ${pathname.startsWith("/notifiche") ? "bg-primary/15 text-primary" : ""}`}

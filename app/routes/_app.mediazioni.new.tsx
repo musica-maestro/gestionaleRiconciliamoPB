@@ -1,12 +1,20 @@
-import { Form, Link, useActionData, useNavigation } from "@remix-run/react";
+import { Form, Link, useActionData, useLoaderData, useNavigation } from "@remix-run/react";
 import { json, redirect, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
+import { useState } from "react";
 import { requireUserAndRole } from "~/lib/auth.server";
 import { createPB } from "~/lib/pocketbase.server";
 import { ESITO_FINALE_VALUES, normalizeEsitoFinale } from "~/lib/esito-finale";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   await requireUserAndRole(request, "admin", "manager");
-  return json({});
+  const { pb } = await createPB(request);
+  const materiaResp = await pb.collection("materia_opzioni").getFullList({
+    filter: "attivo = true",
+    sort: "nome",
+  });
+  return json({
+    materiaOpzioni: materiaResp.map((r) => (r.nome as string) ?? "").filter(Boolean),
+  });
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -32,6 +40,13 @@ export async function action({ request }: ActionFunctionArgs) {
   const modalita_convocazione = String(formData.get("modalita_convocazione") ?? "").trim() || undefined;
   const esitoRaw = String(formData.get("esito_finale") ?? "").trim();
   const esito_finale = esitoRaw ? normalizeEsitoFinale(esitoRaw) : undefined;
+  const trasmessa = String(formData.get("trasmessa") ?? "") === "true";
+  const proposta_mediatore = String(formData.get("proposta_mediatore") ?? "") === "true";
+  const esoneratiRaw = String(formData.get("numero_esonerati_gratuito_patrocinio") ?? "").trim();
+  const numero_esonerati_gratuito_patrocinio = esoneratiRaw === ""
+    ? 0
+    : Math.max(0, Math.floor(Number(esoneratiRaw)) || 0);
+  const materia_altro = String(formData.get("materia_altro") ?? "").trim() || undefined;
 
   const body: Record<string, unknown> = {
     rgm: rgm || undefined,
@@ -44,6 +59,10 @@ export async function action({ request }: ActionFunctionArgs) {
     motivazione_deposito: motivazione_deposito || undefined,
     modalita_convocazione: modalita_convocazione || undefined,
     esito_finale: esito_finale || undefined,
+    trasmessa,
+    proposta_mediatore,
+    numero_esonerati_gratuito_patrocinio,
+    materia_altro: oggetto.toLowerCase() === "altro" ? materia_altro : undefined,
     mediatore: user.id,
   };
 
@@ -64,9 +83,11 @@ const inputClass =
 const labelClass = "block text-sm font-medium text-slate-700";
 
 export default function NewMediazione() {
+  const { materiaOpzioni } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state === "submitting";
+  const [oggetto, setOggetto] = useState("");
 
   return (
     <div>
@@ -88,9 +109,35 @@ export default function NewMediazione() {
               <input id="rgm" name="rgm" type="text" className={inputClass} />
             </div>
             <div>
-              <label htmlFor="oggetto" className={labelClass}>Oggetto</label>
-              <input id="oggetto" name="oggetto" type="text" className={inputClass} />
+              <label htmlFor="oggetto" className={labelClass}>Oggetto / Materia</label>
+              <input
+                id="oggetto"
+                name="oggetto"
+                type="text"
+                list="materia-list-new"
+                value={oggetto}
+                onChange={(e) => setOggetto(e.target.value)}
+                className={inputClass}
+              />
+              <datalist id="materia-list-new">
+                {materiaOpzioni.map((o) => (
+                  <option key={o} value={o} />
+                ))}
+              </datalist>
             </div>
+
+            {oggetto.trim().toLowerCase() === "altro" && (
+              <div className="sm:col-span-2">
+                <label htmlFor="materia_altro" className={labelClass}>Materia (altro)</label>
+                <input
+                  id="materia_altro"
+                  name="materia_altro"
+                  type="text"
+                  placeholder="Specifica la materia"
+                  className={inputClass}
+                />
+              </div>
+            )}
 
             {/* Row 2: Data deposito | Data protocollo */}
             <div>
@@ -163,6 +210,41 @@ export default function NewMediazione() {
                   </option>
                 ))}
               </select>
+            </div>
+
+            <div>
+              <label htmlFor="numero_esonerati_gratuito_patrocinio" className={labelClass}>
+                N. esonerati gratuito patrocinio
+              </label>
+              <input
+                id="numero_esonerati_gratuito_patrocinio"
+                name="numero_esonerati_gratuito_patrocinio"
+                type="number"
+                min={0}
+                step={1}
+                defaultValue={0}
+                className={inputClass}
+              />
+            </div>
+            <div className="flex flex-col gap-3 pt-6">
+              <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  name="trasmessa"
+                  value="true"
+                  className="rounded border-slate-300"
+                />
+                Trasmessa
+              </label>
+              <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  name="proposta_mediatore"
+                  value="true"
+                  className="rounded border-slate-300"
+                />
+                Proposta mediatore
+              </label>
             </div>
 
           </div>

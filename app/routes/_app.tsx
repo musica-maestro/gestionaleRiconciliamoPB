@@ -1,4 +1,4 @@
-import { Outlet, useLoaderData } from "@remix-run/react";
+import { Outlet, useLoaderData, useLocation } from "@remix-run/react";
 import { json, type LoaderFunctionArgs } from "@remix-run/node";
 import { requireUser, canSeeFatture, isAdmin } from "~/lib/auth.server";
 import { createPB, getPocketbaseBaseUrl } from "~/lib/pocketbase.server";
@@ -36,9 +36,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 export default function AppLayout() {
   const { user, avatarUrl, showFatture, showAdmin, unreadNotifiche } = useLoaderData<typeof loader>();
+  const { pathname } = useLocation();
+  const fullBleed = pathname.startsWith("/mediazioni/calendario");
 
   return (
-    <div className="min-h-screen bg-base-200">
+    <div className={`min-h-screen ${fullBleed ? "bg-[var(--cal-bg)]" : "bg-base-200"}`}>
       <TopNav
         user={user}
         avatarUrl={avatarUrl}
@@ -46,7 +48,13 @@ export default function AppLayout() {
         showAdmin={showAdmin}
         unreadNotifiche={unreadNotifiche}
       />
-      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      <main
+        className={
+          fullBleed
+            ? "w-full max-w-none px-0 py-0"
+            : "mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8"
+        }
+      >
         <Outlet />
       </main>
     </div>

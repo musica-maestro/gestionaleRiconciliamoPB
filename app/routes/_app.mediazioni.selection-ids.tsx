@@ -18,7 +18,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
 
   const filterAperte =
-    `(data_chiusura = "" || data_chiusura = null || esito_finale = "" || esito_finale = null || esito_finale = "In corso")`;
+    `(data_chiusura = "" || data_chiusura = null || esito_finale = "" || esito_finale = null)`;
   const filterParts: string[] = [`${filterAperte} && stato = "registrata"`];
 
   const rgm = url.searchParams.get("rgm")?.trim() ?? "";

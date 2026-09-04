@@ -88,14 +88,18 @@ export async function action({ request }: ActionFunctionArgs) {
   return json({ ok: true, ...(data as object) });
 }
 
-function countSlots(
+/** Remaining capacity: for each unique (day, time), seats = max(0, parallel - already booked). */
+function countAvailableSlots(
   dates: string[],
   windows: { from: string; to: string }[],
   durationMin: number,
   parallel: number,
+  occupancy: Record<string, number>,
 ): number {
+  const maxP = Math.max(1, parallel);
   let n = 0;
-  for (const _d of dates) {
+  const seen = new Set<string>();
+  for (const d of dates) {
     for (const w of windows) {
       const [fh, fm] = w.from.split(":").map(Number);
       const [th, tm] = w.to.split(":").map(Number);
@@ -103,7 +107,12 @@ function countSlots(
       const from = fh * 60 + fm;
       const to = th * 60 + tm;
       for (let t = from; t + durationMin <= to; t += durationMin) {
-        n += Math.max(1, parallel);
+        const hh = String(Math.floor(t / 60)).padStart(2, "0");
+        const mm = String(t % 60).padStart(2, "0");
+        const key = `${d}|${hh}:${mm}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        n += Math.max(0, maxP - (occupancy[key] ?? 0));
       }
     }
   }
@@ -149,6 +158,11 @@ export default function PianificaMediazioni() {
   const [searchParams, setSearchParams] = useSearchParams();
   const fetcher = useFetcher<typeof action>();
   const selectionIdsFetcher = useFetcher<{ ids?: string[]; error?: string }>();
+  const occupancyFetcher = useFetcher<{
+    occupancy?: Record<string, number>;
+    dayTotals?: Record<string, number>;
+    error?: string;
+  }>();
 
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [dates, setDates] = useState<string[]>([]);
@@ -159,6 +173,7 @@ export default function PianificaMediazioni() {
   const [parallel, setParallel] = useState(1);
   const [searchInput, setSearchInput] = useState(q);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const occupancyDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const headerCheckboxRef = useRef<HTMLInputElement>(null);
   const pendingSelectionKeyRef = useRef<string | null>(null);
@@ -227,17 +242,39 @@ export default function PianificaMediazioni() {
     );
   }
 
+  useEffect(() => {
+    if (occupancyDebounceRef.current) clearTimeout(occupancyDebounceRef.current);
+    if (dates.length === 0) return;
+    occupancyDebounceRef.current = setTimeout(() => {
+      const sorted = [...dates].sort().join(",");
+      occupancyFetcher.load(`/mediazioni/pianifica/occupancy?dates=${encodeURIComponent(sorted)}`);
+    }, 250);
+    return () => {
+      if (occupancyDebounceRef.current) clearTimeout(occupancyDebounceRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload only when dates change
+  }, [dates.join(",")]);
+
+  const occupancy = occupancyFetcher.data?.occupancy ?? {};
   const validWindows = windows.filter(isValidWindow);
-  const slots = countSlots(
+  const slots = countAvailableSlots(
     dates,
     validWindows.map(({ from, to }) => ({ from, to })),
     durationMin,
     parallel,
+    occupancy,
   );
   const needed = selectedIds.length;
   const slotsOk = needed === 0 || (slots >= needed && slots > 0);
   const canSubmit =
     needed > 0 && slots >= needed && dates.length > 0 && validWindows.length > 0 && fetcher.state === "idle";
+
+  useEffect(() => {
+    if (!fetcher.data || !("ok" in fetcher.data) || dates.length === 0) return;
+    const sorted = [...dates].sort().join(",");
+    occupancyFetcher.load(`/mediazioni/pianifica/occupancy?dates=${encodeURIComponent(sorted)}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh occupancy after successful plan
+  }, [fetcher.data]);
 
   function goToPage(p: number) {
     const next = new URLSearchParams(searchParams);
@@ -277,7 +314,7 @@ export default function PianificaMediazioni() {
         <div>
           <h1 className="text-2xl font-semibold text-base-content">Pianifica incontri</h1>
           <p className="text-sm text-base-content/60 mt-0.5">
-            Scegli le pratiche, i giorni e le fasce orarie. Gli slot si assegnano in ordine; le pratiche passano poi in <strong>Da notificare</strong>.
+            Scegli le pratiche, i giorni e le fasce. Gli incontri si distribuiscono sui giorni/orari più vuoti (parallelo minimo); le pratiche passano poi in <strong>Da notificare</strong>.
           </p>
         </div>
         {/* Riepilogo inline */}
@@ -447,7 +484,7 @@ export default function PianificaMediazioni() {
         <div className="xl:col-span-5 xl:row-span-1">
           <SectionCard
             title="Impostazioni slot"
-            description="Configura durata e parallelismo degli incontri."
+            description="La distribuzione preferisce giorni e orari più vuoti; le parallele sono solo un tetto massimo."
             icon={<Clock className="h-5 w-5" />}
             className="h-full"
           >
@@ -464,8 +501,8 @@ export default function PianificaMediazioni() {
                 />
               </label>
               <label className="flex flex-col gap-1">
-                <span className="text-xs font-semibold text-base-content/70">Parallele</span>
-                <span className="text-[11px] text-base-content/50">Incontri contemporanei</span>
+                <span className="text-xs font-semibold text-base-content/70">Max parallele</span>
+                <span className="text-[11px] text-base-content/50">Tetto per stesso orario</span>
                 <input
                   type="number"
                   min={1}
@@ -475,6 +512,11 @@ export default function PianificaMediazioni() {
                 />
               </label>
             </div>
+            {dates.length > 0 && Object.keys(occupancy).length > 0 && (
+              <p className="text-[11px] text-base-content/55 mt-3">
+                Occupazione già in calendario considerata: gli slot liberi calano di conseguenza.
+              </p>
+            )}
           </SectionCard>
         </div>
       </div>

@@ -5,6 +5,7 @@ import { X } from "lucide-react";
 export const EXPORT_FIELDS = [
   { key: "rgm", label: "RGM" },
   { key: "oggetto", label: "Oggetto" },
+  { key: "materia_altro", label: "Materia (altro)" },
   { key: "valore", label: "Valore" },
   { key: "istanti", label: "Istanti" },
   { key: "istanti_cf", label: "CF Istanti" },
@@ -18,6 +19,9 @@ export const EXPORT_FIELDS = [
   { key: "modalita_convocazione", label: "Modalità convocazione" },
   { key: "mediatore_name", label: "Mediatore" },
   { key: "esito_finale", label: "Esito" },
+  { key: "trasmessa", label: "Trasmessa" },
+  { key: "proposta_mediatore", label: "Proposta mediatore" },
+  { key: "numero_esonerati_gratuito_patrocinio", label: "N. esonerati GP" },
   { key: "data_protocollo", label: "Data protocollo" },
   { key: "data_chiusura", label: "Data chiusura" },
   { key: "data_avvio_entro", label: "Data avvio entro" },

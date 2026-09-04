@@ -29,6 +29,7 @@ export enum Collections {
   MediazioniView = "mediazioni_view",
   ModalitaConvocazioneOpzioni = "modalita_convocazione_opzioni",
   ModalitaOpzioni = "modalita_opzioni",
+  ModelliDocumenti = "modelli_documenti",
   MotivazioneDepositoOpzioni = "motivazione_deposito_opzioni",
   Notifiche = "notifiche",
   Partecipazioni = "partecipazioni",
@@ -78,21 +79,21 @@ export enum ConvocazioniTipologiaOptions {
 export enum DashboardChiusePerEsitoMeseEsitoFinaleOptions {
   "Accordo" = "Accordo",
   "Mancato accordo" = "Mancato accordo",
-  "In corso" = "In corso",
   "Chiusa d'ufficio" = "Chiusa d'ufficio",
   "Ritirata" = "Ritirata",
   "Nessuna risposta" = "Nessuna risposta",
   "Non consegnabile" = "Non consegnabile",
+  "Nessuna adesione" = "Nessuna adesione",
 }
 
 export enum MediazioniEsitoFinaleOptions {
   "Accordo" = "Accordo",
   "Mancato accordo" = "Mancato accordo",
-  "In corso" = "In corso",
   "Chiusa d'ufficio" = "Chiusa d'ufficio",
   "Ritirata" = "Ritirata",
   "Nessuna risposta" = "Nessuna risposta",
   "Non consegnabile" = "Non consegnabile",
+  "Nessuna adesione" = "Nessuna adesione",
 }
 
 export enum MediazioniStatoOptions {
@@ -105,11 +106,11 @@ export enum MediazioniStatoOptions {
 export enum MediazioniViewEsitoFinaleOptions {
   "Accordo" = "Accordo",
   "Mancato accordo" = "Mancato accordo",
-  "In corso" = "In corso",
   "Chiusa d'ufficio" = "Chiusa d'ufficio",
   "Ritirata" = "Ritirata",
   "Nessuna risposta" = "Nessuna risposta",
   "Non consegnabile" = "Non consegnabile",
+  "Nessuna adesione" = "Nessuna adesione",
 }
 
 export enum MediazioniViewStatoOptions {
@@ -122,6 +123,7 @@ export enum MediazioniViewStatoOptions {
 export enum NotificheTipoOptions {
   "assegnazione" = "assegnazione",
   "riassegnazione" = "riassegnazione",
+  "adesione" = "adesione",
 }
 
 export enum PartecipazioniIstanteOChiamatoOptions {
@@ -344,6 +346,11 @@ export type MediazioniRecord = {
   stato?: MediazioniStatoOptions
   data_assegnazione?: IsoDateString
   codice_univoco_cliente?: string
+  adesione?: boolean
+  trasmessa?: boolean
+  proposta_mediatore?: boolean
+  numero_esonerati_gratuito_patrocinio?: number
+  materia_altro?: string
   created?: IsoDateString
   updated?: IsoDateString
 }
@@ -365,6 +372,11 @@ export type MediazioniViewRecord = {
   codice_univoco_cliente?: string
   created?: IsoDateString
   updated?: IsoDateString
+  adesione?: boolean
+  trasmessa?: boolean
+  proposta_mediatore?: boolean
+  numero_esonerati_gratuito_patrocinio?: number
+  materia_altro?: string
   mediatore_name: string
   istanti_testo?: string
   chiamati_testo?: string
@@ -380,6 +392,15 @@ export type ModalitaConvocazioneOpzioniRecord = {
 export type ModalitaOpzioniRecord = {
   id: string
   nome: string
+  attivo?: boolean
+  created?: IsoDateString
+  updated?: IsoDateString
+}
+export type ModelliDocumentiRecord = {
+  id: string
+  nome: string
+  descrizione?: string
+  file: string
   attivo?: boolean
   created?: IsoDateString
   updated?: IsoDateString
@@ -441,6 +462,8 @@ export type UsersRecord = {
   id: string
   name: string
   avatar?: string
+  sesso?: "male" | "female" | string
+  firma?: string
   stato?: string
   ruoli?: UsersRuoliOptions
   ruolo_corrente: UsersRuoloCorrenteOptions
@@ -476,6 +499,7 @@ export type MediazioniResponse<Texpand = unknown> = Required<MediazioniRecord> &
 export type MediazioniViewResponse<Texpand = unknown> = Required<MediazioniViewRecord> & BaseSystemFields<Texpand>
 export type ModalitaConvocazioneOpzioniResponse<Texpand = unknown> = Required<ModalitaConvocazioneOpzioniRecord> & BaseSystemFields<Texpand>
 export type ModalitaOpzioniResponse<Texpand = unknown> = Required<ModalitaOpzioniRecord> & BaseSystemFields<Texpand>
+export type ModelliDocumentiResponse<Texpand = unknown> = Required<ModelliDocumentiRecord> & BaseSystemFields<Texpand>
 export type MotivazioneDepositoOpzioniResponse<Texpand = unknown> = Required<MotivazioneDepositoOpzioniRecord> & BaseSystemFields<Texpand>
 export type NotificheResponse<Texpand = unknown> = Required<NotificheRecord> & BaseSystemFields<Texpand>
 export type PartecipazioniResponse<Texpand = unknown> = Required<PartecipazioniRecord> & BaseSystemFields<Texpand>
@@ -507,6 +531,7 @@ export type CollectionRecords = {
   "mediazioni_view": MediazioniViewRecord
   "modalita_convocazione_opzioni": ModalitaConvocazioneOpzioniRecord
   "modalita_opzioni": ModalitaOpzioniRecord
+  "modelli_documenti": ModelliDocumentiRecord
   "motivazione_deposito_opzioni": MotivazioneDepositoOpzioniRecord
   "notifiche": NotificheRecord
   "partecipazioni": PartecipazioniRecord
@@ -539,6 +564,7 @@ export type CollectionResponses = {
   "mediazioni_view": MediazioniViewResponse
   "modalita_convocazione_opzioni": ModalitaConvocazioneOpzioniResponse
   "modalita_opzioni": ModalitaOpzioniResponse
+  "modelli_documenti": ModelliDocumentiResponse
   "motivazione_deposito_opzioni": MotivazioneDepositoOpzioniResponse
   "notifiche": NotificheResponse
   "partecipazioni": PartecipazioniResponse

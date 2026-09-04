@@ -6,4 +6,6 @@ export type PbUser = {
   ruoli?: string[];
   ruolo_corrente?: string;
   avatar?: string;
+  firma?: string;
+  sesso?: string;
 };

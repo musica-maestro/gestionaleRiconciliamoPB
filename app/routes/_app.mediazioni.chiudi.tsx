@@ -82,8 +82,8 @@ function mapExcelRowsToClose(jsonRows: Record<string, unknown>[]): CloseRow[] {
 
 function isAlreadyClosed(row: { esito_finale?: unknown; data_chiusura?: unknown }) {
   const dataChiusura = row.data_chiusura ? String(row.data_chiusura).trim() : "";
-  const esito = row.esito_finale ? String(row.esito_finale).trim().toLowerCase() : "";
-  return Boolean(dataChiusura) && Boolean(esito) && esito !== "in corso";
+  const esito = row.esito_finale ? String(row.esito_finale).trim() : "";
+  return Boolean(dataChiusura) && Boolean(esito);
 }
 
 async function validateRows(

@@ -7,6 +7,7 @@ export const meta: MetaFunction = () => [{ title: "Mediazioni" }];
 import { getCurrentRole, requireUser } from "~/lib/auth.server";
 import { createPB } from "~/lib/pocketbase.server";
 import { callRiconciliamoApi } from "~/lib/riconciliamo-api.server";
+import { createLettereIncaricoForMediazioni } from "~/lib/lettera-incarico.server";
 import {
   FilterableTable,
   FilterTextInput,
@@ -18,17 +19,17 @@ import {
 } from "~/components/data-table";
 import { ExportMediazioniDialog } from "~/components/export-mediazioni-dialog";
 import { ESITO_FINALE_FILTER_OPTIONS } from "~/lib/esito-finale";
-import { Eye, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from "lucide-react";
+import { AlertTriangle, Eye, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from "lucide-react";
 const PER_PAGE_OPTIONS = [10, 25, 50, 100] as const;
 const SORT_FIELDS = ["rgm", "oggetto", "data_deposito", "data_protocollo", "data_chiusura", "esito_finale", "modalita_mediazione", "competenza", "mediatore_name", "stato", "data_assegnazione"] as const;
 const TABS = ["da-assegnare", "da-pianificare", "da-notificare", "aperte", "chiuse"] as const;
 type Tab = (typeof TABS)[number];
 
-/** Chiusa = data chiusura + esito valorizzato (e non "In corso"). */
+/** Chiusa = data chiusura + esito valorizzato. */
 const FILTER_CHIUSE =
-  `(data_chiusura != "" && data_chiusura != null && esito_finale != "" && esito_finale != null && esito_finale != "In corso")`;
+  `(data_chiusura != "" && data_chiusura != null && esito_finale != "" && esito_finale != null)`;
 const FILTER_APERTE =
-  `(data_chiusura = "" || data_chiusura = null || esito_finale = "" || esito_finale = null || esito_finale = "In corso")`;
+  `(data_chiusura = "" || data_chiusura = null || esito_finale = "" || esito_finale = null)`;
 
 function stripHtml(html: string): string {
   if (!html || typeof html !== "string") return "";
@@ -74,7 +75,20 @@ export async function action({ request }: ActionFunctionArgs) {
   if (!res.ok) {
     return json({ error: (data as { message?: string }).message ?? "Assegnazione fallita" }, res.status);
   }
-  return json({ ok: true, ...(data as object) });
+
+  // Fill lettera incarico with docx-templates (<campo> / <<campo>>) and attach PDF — same approach as Talento raccomandate export.
+  const assignedIds =
+    Array.isArray((data as { assignedIds?: string[] }).assignedIds) &&
+    (data as { assignedIds: string[] }).assignedIds.length > 0
+      ? (data as { assignedIds: string[] }).assignedIds
+      : ids;
+  const { pb } = await createPB(request);
+  const letterResult = await createLettereIncaricoForMediazioni(pb, assignedIds);
+  return json({
+    ok: true,
+    ...(data as object),
+    lettere: letterResult,
+  });
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -109,6 +123,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const competenza = url.searchParams.get("competenza")?.trim() ?? "";
   const nota = url.searchParams.get("nota")?.trim() ?? "";
   const mediatore = url.searchParams.get("mediatore")?.trim() ?? "";
+  const adesioneParam = url.searchParams.get("adesione")?.trim() ?? "";
+  const adesione =
+    effectiveTab === "aperte" && (adesioneParam === "si" || adesioneParam === "no")
+      ? adesioneParam
+      : "";
 
   const sortField = SORT_FIELDS.includes(url.searchParams.get("sort") as (typeof SORT_FIELDS)[number])
     ? (url.searchParams.get("sort") as (typeof SORT_FIELDS)[number])
@@ -141,6 +160,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (competenza) filterParts.push(pb.filter("competenza ~ {:competenza}", { competenza }));
   if (nota) filterParts.push(pb.filter("nota ~ {:nota}", { nota }));
   if (mediatore) filterParts.push(pb.filter("mediatore_name ~ {:mediatore}", { mediatore }));
+  if (adesione === "si") filterParts.push("adesione = true");
+  if (adesione === "no") filterParts.push("adesione = false");
   const filter = filterParts.length > 0 ? filterParts.join(" && ") : undefined;
 
   const roleScope = role === "mediatore" ? `mediatore = "${user.id}"` : "";
@@ -155,6 +176,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const [
     result,
     modalitaList,
+    competenzaList,
     mediatoriList,
     countDaAssegnare,
     countDaPianificare,
@@ -168,6 +190,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }),
     pb
       .collection("modalita_opzioni")
+      .getFullList({ filter: "attivo = true", sort: "nome", ...noCancel })
+      .catch(() => []),
+    pb
+      .collection("competenza_opzioni")
       .getFullList({ filter: "attivo = true", sort: "nome", ...noCancel })
       .catch(() => []),
     canAssign
@@ -205,7 +231,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
       .catch(() => 0),
   ]);
 
-  const mediazioni = result.items.map((m) => ({
+  const competenzeAttive = new Set(
+    (competenzaList as { nome?: string }[])
+      .map((o) => String(o.nome ?? "").trim().toLowerCase())
+      .filter(Boolean)
+  );
+
+  const mediazioni = result.items.map((m) => {
+    const competenzaRaw = String(m.competenza ?? "").trim();
+    const competenza = competenzaRaw || "—";
+    const competenzaNonAttiva =
+      Boolean(competenzaRaw) && !competenzeAttive.has(competenzaRaw.toLowerCase());
+    return {
     id: String(m.id),
     rgm: String(m.rgm ?? "—"),
     oggetto: String(m.oggetto ?? "—"),
@@ -220,9 +257,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
     istanti: m.istanti_testo ? String(m.istanti_testo) : null,
     chiamati: m.chiamati_testo ? String(m.chiamati_testo) : null,
     avvocati: m.avvocati_testo ? String(m.avvocati_testo) : null,
-    competenza: String(m.competenza ?? "—"),
+    competenza,
+    competenzaNonAttiva,
     nota: m.nota ? stripHtml(String(m.nota)) : "—",
-  }));
+    adesione: Boolean((m as { adesione?: boolean }).adesione),
+  };
+  });
 
   const modalitaOptions = (modalitaList as { nome: string }[]).map((o) => ({ value: o.nome, label: o.nome }));
   const mediatori = (mediatoriList as { id: string; name?: string; email?: string; stato?: string }[])
@@ -261,6 +301,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       competenza,
       nota,
       mediatore,
+      adesione,
     },
     sortField,
     order,
@@ -322,6 +363,7 @@ function filtersRecordFromLoader(filters: {
   competenza: string;
   nota: string;
   mediatore: string;
+  adesione: string;
 }): Record<string, string> {
   return {
     rgm: filters.rgm,
@@ -341,6 +383,7 @@ function filtersRecordFromLoader(filters: {
     competenza: filters.competenza,
     nota: filters.nota,
     mediatore: filters.mediatore,
+    adesione: filters.adesione,
   };
 }
 
@@ -505,7 +548,12 @@ export default function MediazioniList() {
   const [expandedNota, setExpandedNota] = useState<Set<string>>(new Set());
   const zebraEven = { backgroundColor: "color-mix(in oklab, var(--color-primary, #3aaeba) 6%, transparent)" };
   const showCheckboxes = canAssign && tab === "da-assegnare";
-  const colSpan = showCheckboxes ? 15 : 14;
+  const showAdesione = tab === "aperte";
+  const colSpan = (showCheckboxes ? 15 : 14) + (showAdesione ? 1 : 0);
+  const adesioneOptions = [
+    { value: "si", label: "Sì" },
+    { value: "no", label: "No" },
+  ];
 
   const tabItems: { id: Tab; label: string; count?: number; show?: boolean }[] = [
     { id: "da-assegnare", label: "Da assegnare", count: tabCounts["da-assegnare"], show: canAssign },
@@ -525,6 +573,9 @@ export default function MediazioniList() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
+          <Link to="/mediazioni/calendario" className="btn btn-outline btn-sm">
+            Calendario
+          </Link>
           <button
             type="button"
             onClick={() => navigate(`/mediazioni?tab=${tab}`)}
@@ -865,6 +916,17 @@ export default function MediazioniList() {
                   </div>
                   <FilterTextInput name="mediatore" defaultValue={filters.mediatore} placeholder="Cerca mediatore" />
                 </th>
+                {showAdesione && (
+                  <th className={`${filterableTableThClass} min-w-[110px]`}>
+                    <div className={filterableTableHeaderLabelClass}>Adesione</div>
+                    <FilterSelect
+                      name="adesione"
+                      defaultValue={filters.adesione}
+                      options={adesioneOptions}
+                      emptyLabel="Tutte"
+                    />
+                  </th>
+                )}
                 <th className={`${filterableTableThClass} min-w-[180px]`}>
                   <div className={filterableTableHeaderLabelClass}>
                     <SortLink label="Oggetto" field="oggetto" currentSort={sortField} currentOrder={order} searchParams={searchParams} />
@@ -957,6 +1019,15 @@ export default function MediazioniList() {
                     <td className={`py-2 max-w-[140px] ${cellTruncate}`}>
                       <span className="block truncate">{m.mediatore_name}</span>
                     </td>
+                    {showAdesione && (
+                      <td className="py-2 whitespace-nowrap">
+                        {m.adesione ? (
+                          <span className="badge badge-success badge-sm">Sì</span>
+                        ) : (
+                          <span className="badge badge-ghost badge-sm">No</span>
+                        )}
+                      </td>
+                    )}
                     <td className={`py-2 max-w-[200px] ${cellTruncate}`}>
                       <span className="block truncate">{m.oggetto}</span>
                     </td>
@@ -986,7 +1057,19 @@ export default function MediazioniList() {
                       <span className="block truncate">{m.avvocati ?? "—"}</span>
                     </td>
                     <td className={`py-2 max-w-[120px] ${cellTruncate}`}>
-                      <span className="block truncate">{m.competenza}</span>
+                      <span className="inline-flex items-center gap-1 max-w-full">
+                        <span className="block truncate">{m.competenza}</span>
+                        {m.competenzaNonAttiva && (
+                          <span
+                            className="tooltip tooltip-left inline-flex shrink-0 cursor-help"
+                            data-tip="Non abbiamo questa competenza"
+                            title="Non abbiamo questa competenza"
+                            aria-label="Non abbiamo questa competenza"
+                          >
+                            <AlertTriangle className="h-3.5 w-3.5 text-amber-500" aria-hidden="true" />
+                          </span>
+                        )}
+                      </span>
                     </td>
                     <td className="py-2 whitespace-nowrap">{m.modalita_mediazione}</td>
                     <td className="py-2 whitespace-nowrap">{m.esito_finale}</td>

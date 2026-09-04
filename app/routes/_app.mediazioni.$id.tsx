@@ -6,15 +6,17 @@ import {
   useNavigation,
   useSearchParams,
 } from "@remix-run/react";
-import { useState, useEffect } from "react";
-import { Pencil, Plus, Trash2, UserPlus, X } from "lucide-react";
+import { useState, useEffect, useRef, type ReactNode } from "react";
+import { AlertTriangle, Check, Copy, Mail, Pencil, Plus, Trash2, UserPlus, X } from "lucide-react";
 import { json, redirect, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
 import type { MetaFunction } from "@remix-run/node";
 import { getCurrentRole, requireUser } from "~/lib/auth.server";
 import { createPB } from "~/lib/pocketbase.server";
 import { AddParteDialog } from "~/components/add-parte-dialog";
 import { AddAvvocatoDialog } from "~/components/add-avvocato-dialog";
+import { RichTextEditor } from "~/components/rich-text-editor";
 import { ESITO_FINALE_FORM_OPTIONS, normalizeEsitoFinale } from "~/lib/esito-finale";
+import { createLetteraIncaricoForMediazione } from "~/lib/lettera-incarico.server";
 
 // Converts a "YYYY-MM-DDTHH:MM" string (interpreted as Europe/Rome local time) to a
 // PocketBase-compatible UTC string "YYYY-MM-DD HH:MM:SS.000Z".
@@ -106,6 +108,13 @@ export async function action({ request, params }: ActionFunctionArgs) {
     const esito_finale = esitoRaw ? normalizeEsitoFinale(esitoRaw) : undefined;
     const nota = String(formData.get("nota") ?? "").trim() || undefined;
     const mediatore = String(formData.get("mediatore") ?? "").trim();
+    const trasmessa = String(formData.get("trasmessa") ?? "") === "true";
+    const proposta_mediatore = String(formData.get("proposta_mediatore") ?? "") === "true";
+    const esoneratiRaw = String(formData.get("numero_esonerati_gratuito_patrocinio") ?? "").trim();
+    const numero_esonerati_gratuito_patrocinio = esoneratiRaw === ""
+      ? 0
+      : Math.max(0, Math.floor(Number(esoneratiRaw)) || 0);
+    const materia_altro = String(formData.get("materia_altro") ?? "").trim() || undefined;
 
     const updateData: Record<string, unknown> = {
       rgm,
@@ -120,16 +129,50 @@ export async function action({ request, params }: ActionFunctionArgs) {
       modalita_convocazione,
       esito_finale,
       nota: nota || undefined,
+      trasmessa,
+      proposta_mediatore,
+      numero_esonerati_gratuito_patrocinio,
+      materia_altro: oggetto?.toLowerCase() === "altro" ? materia_altro : "",
     };
 
     // Only admins can reassign the mediatore, regardless of submitted form fields.
+    const prevMediatore = typeof mediatoreId === "string" ? mediatoreId : "";
+    let mediatoreChanged = false;
     if (role === "admin" && mediatore) {
       updateData.mediatore = mediatore;
+      mediatoreChanged = mediatore !== prevMediatore;
     }
 
     try {
       await pb.collection("mediazioni").update(id, updateData);
+      if (mediatoreChanged && mediatore) {
+        const letter = await createLetteraIncaricoForMediazione(pb, id, {
+          riassegnazione: prevMediatore !== "",
+        });
+        if (!letter.ok) {
+          return json({
+            toast: "saved" as const,
+            mediazioneId: id,
+            message: `Salvata, ma lettera: ${letter.error}`,
+          });
+        }
+      }
       return json({ toast: "saved" as const, mediazioneId: id });
+    } catch (e) {
+      return json(
+        {
+          toast: "error" as const,
+          mediazioneId: id,
+          message: pocketBaseErrorMessage(e),
+        },
+        { status: 422 }
+      );
+    }
+  } else if (intent === "set_adesione") {
+    const adesione = String(formData.get("adesione") ?? "") === "true";
+    try {
+      await pb.collection("mediazioni").update(id, { adesione });
+      return redirect(`/mediazioni/${id}`);
     } catch (e) {
       return json(
         {
@@ -715,6 +758,12 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       nota: mediazione.nota ?? "",
       mediatore_id: mediatoreId ?? "",
       mediatore_name: mediatoreExpanded?.name ?? "—",
+      adesione: Boolean((mediazione as { adesione?: boolean }).adesione),
+      trasmessa: Boolean((mediazione as { trasmessa?: boolean }).trasmessa),
+      proposta_mediatore: Boolean((mediazione as { proposta_mediatore?: boolean }).proposta_mediatore),
+      numero_esonerati_gratuito_patrocinio:
+        Number((mediazione as { numero_esonerati_gratuito_patrocinio?: number }).numero_esonerati_gratuito_patrocinio ?? 0) || 0,
+      materia_altro: (mediazione as { materia_altro?: string }).materia_altro ?? "",
     },
     partecipazioni,
     incontri,
@@ -1236,6 +1285,8 @@ function ParteCard({
 // ─── Add Incontro Dialog ──────────────────────────────────────────────────────
 
 function AddIncontroDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  const backdropMouseDown = useRef(false);
+
   useEffect(() => {
     if (!isOpen) return;
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -1248,33 +1299,42 @@ function AddIncontroDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () =
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onMouseDown={(e) => { backdropMouseDown.current = e.target === e.currentTarget; }}
+      onClick={(e) => {
+        if (backdropMouseDown.current && e.target === e.currentTarget) onClose();
+        backdropMouseDown.current = false;
+      }}
     >
-      <div className="w-full max-w-lg bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col">
-        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5">
+      <div
+        className="w-full max-w-3xl max-h-[92vh] bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5 shrink-0">
           <h2 className="text-base font-semibold text-slate-800">Nuovo incontro</h2>
           <button type="button" onClick={onClose} className="rounded-md p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
             <X className="h-4 w-4" />
           </button>
         </div>
-        <Form method="post" onSubmit={onClose} className="px-5 py-4 space-y-4">
+        <Form method="post" onSubmit={onClose} className="px-5 py-4 space-y-4 overflow-y-auto">
           <input type="hidden" name="_action" value="add_incontro" />
-          <div>
-            <label className={EDIT_LABEL}>Data e ora programmazione</label>
-            <input type="datetime-local" name="data_programmazione" className={EDIT_INPUT} />
-          </div>
-          <div>
-            <label className={EDIT_LABEL}>Link Google Meet</label>
-            <input
-              type="url"
-              name="link_incontro"
-              placeholder="https://meet.google.com/xxx-xxxx-xxx"
-              className={EDIT_INPUT}
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className={EDIT_LABEL}>Data e ora programmazione</label>
+              <input type="datetime-local" name="data_programmazione" className={EDIT_INPUT} />
+            </div>
+            <div>
+              <label className={EDIT_LABEL}>Link Google Meet</label>
+              <input
+                type="url"
+                name="link_incontro"
+                placeholder="https://meet.google.com/xxx-xxxx-xxx"
+                className={EDIT_INPUT}
+              />
+            </div>
           </div>
           <div>
             <label className={EDIT_LABEL}>Report</label>
-            <textarea name="report" rows={3} className={EDIT_INPUT} placeholder="Testo o HTML" />
+            <RichTextEditor name="report" placeholder="Note, esito, punti discussi…" initialHeight={280} />
           </div>
           <div className="pt-1 flex gap-2.5">
             <button type="button" onClick={onClose} className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors">
@@ -1290,9 +1350,317 @@ function AddIncontroDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () =
   );
 }
 
+const MAIL_FOOTER = `Riconciliamo S.r.l.s., Via Antonio Bertoloni n. 27 - 00197 - Roma RM 
+
+Ente iscritto presso il Ministero della Giustizia al n. 1121 del Registro degli Organismi di Mediazione ai sensi del D.Lgs. 28/2010.`;
+
+function partyShortName(p: {
+  soggetto_cognome?: string;
+  soggetto_ragione_sociale?: string;
+  soggetto_name: string;
+}): string {
+  const cognome = (p.soggetto_cognome ?? "").trim();
+  if (cognome) return cognome;
+  const rs = (p.soggetto_ragione_sociale ?? "").trim();
+  if (rs) return rs;
+  const parts = p.soggetto_name.trim().split(/\s+/);
+  return parts[parts.length - 1] || p.soggetto_name;
+}
+
+function formatIncontroWhen(iso: string): string {
+  const start = new Date(iso);
+  const end = new Date(start.getTime() + 60 * 60 * 1000);
+  const weekday = new Intl.DateTimeFormat("it-IT", {
+    timeZone: "Europe/Rome",
+    weekday: "long",
+  }).format(start);
+  const dayMonth = new Intl.DateTimeFormat("it-IT", {
+    timeZone: "Europe/Rome",
+    day: "numeric",
+    month: "long",
+  }).format(start);
+  const startCap = weekday.charAt(0).toUpperCase() + weekday.slice(1);
+  const fmtTime = (d: Date) =>
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "Europe/Rome",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    }).format(d);
+  const startTime = fmtTime(start).replace(/\s?(AM|PM)/i, "").trim();
+  const endTime = fmtTime(end).replace(/\s/g, "");
+  return `${startCap}, ${dayMonth} · ${startTime} - ${endTime}`;
+}
+
+function buildAvvocatoMail(opts: {
+  rgm: string;
+  partiLabel: string;
+  dataProgrammazione: string | null;
+  link: string;
+}): { subject: string; body: string; bodyHtml: string } {
+  const subject = ["Link mediazione", opts.rgm, opts.partiLabel].filter(Boolean).join(" ").trim();
+  const when = opts.dataProgrammazione
+    ? formatIncontroWhen(opts.dataProgrammazione)
+    : "Data da definire";
+  const body = `Egr. Avv.
+
+di seguito i riferimenti necessari per partecipare alla mediazione in oggetto:
+
+
+${when}
+Link alla videochiamata: ${opts.link}
+
+
+Cordialità
+
+--
+
+${MAIL_FOOTER}`;
+
+  const escapeHtml = (s: string) =>
+    s
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+
+  const bodyHtml = `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#111">
+<p>Egr. Avv.</p>
+<p>di seguito i riferimenti necessari per partecipare alla mediazione in oggetto:</p>
+<p>${escapeHtml(when)}<br>
+Link alla videochiamata: <a href="${escapeHtml(opts.link)}">${escapeHtml(opts.link)}</a></p>
+<p>Cordialità</p>
+<p>--</p>
+<p>${escapeHtml(MAIL_FOOTER).replace(/\n/g, "<br>")}</p>
+</div>`;
+
+  return { subject, body, bodyHtml };
+}
+
+async function copyPlainAndHtml(plain: string, html?: string) {
+  if (html && typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/plain": new Blob([plain], { type: "text/plain" }),
+          "text/html": new Blob([html], { type: "text/html" }),
+        }),
+      ]);
+      return;
+    } catch {
+      /* fall through */
+    }
+  }
+  await navigator.clipboard.writeText(plain);
+}
+
+function linkifyText(text: string): ReactNode[] {
+  const urlRe = /(https?:\/\/[^\s]+)/g;
+  const parts = text.split(urlRe);
+  return parts.map((part, i) =>
+    /^https?:\/\//.test(part) ? (
+      <a
+        key={i}
+        href={part}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-[#3aaeba] underline break-all"
+      >
+        {part}
+      </a>
+    ) : (
+      <span key={i}>{part}</span>
+    )
+  );
+}
+
+function CopyField({
+  label,
+  value,
+  html,
+}: {
+  label: string;
+  value: string;
+  html?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="text-xs font-medium text-slate-600">{label}</span>
+        <button
+          type="button"
+          onClick={async () => {
+            try {
+              await copyPlainAndHtml(value, html);
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1500);
+            } catch {
+              /* ignore */
+            }
+          }}
+          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-[#3aaeba] hover:bg-[#3aaeba]/10 transition-colors"
+        >
+          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+          {copied ? "Copiato" : "Copia"}
+        </button>
+      </div>
+      <pre className="whitespace-pre-wrap rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 font-sans leading-relaxed">
+        {linkifyText(value)}
+      </pre>
+    </div>
+  );
+}
+
+function buildMailto(opts: {
+  to?: string[];
+  subject: string;
+  body: string;
+}): string {
+  // Use encodeURIComponent (%20) — URLSearchParams uses "+" which many mail clients show literally
+  const to = (opts.to ?? []).filter(Boolean).join(",");
+  const qs = [
+    `subject=${encodeURIComponent(opts.subject)}`,
+    `body=${encodeURIComponent(opts.body)}`,
+  ].join("&");
+  return `mailto:${to}?${qs}`;
+}
+
+function MailAvvocatoDialog({
+  incontro,
+  rgm,
+  partiLabel,
+  recipients,
+  onClose,
+}: {
+  incontro: Incontro | null;
+  rgm: string;
+  partiLabel: string;
+  recipients: string[];
+  onClose: () => void;
+}) {
+  const backdropMouseDown = useRef(false);
+  const openedMailto = useRef<string | null>(null);
+
+  const mail =
+    incontro?.link_incontro
+      ? buildAvvocatoMail({
+          rgm,
+          partiLabel,
+          dataProgrammazione: incontro.data_programmazione,
+          link: incontro.link_incontro,
+        })
+      : null;
+
+  const mailtoHref = mail
+    ? buildMailto({ to: recipients, subject: mail.subject, body: mail.body })
+    : null;
+
+  useEffect(() => {
+    if (!incontro || !mailtoHref) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [incontro, mailtoHref, onClose]);
+
+  // Open the default mail client once when the dialog opens
+  useEffect(() => {
+    if (!incontro?.id || !mailtoHref) {
+      if (!incontro) openedMailto.current = null;
+      return;
+    }
+    if (openedMailto.current === incontro.id) return;
+    openedMailto.current = incontro.id;
+    window.location.href = mailtoHref;
+  }, [incontro, mailtoHref]);
+
+  if (!incontro?.link_incontro || !mail || !mailtoHref) return null;
+
+  const { subject, body, bodyHtml } = mail;
+  const full = `Oggetto: ${subject}\n\n${body}`;
+  const fullHtml = `<div><p><strong>Oggetto:</strong> ${subject.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</p>${bodyHtml}</div>`;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6"
+      onMouseDown={(e) => {
+        backdropMouseDown.current = e.target === e.currentTarget;
+      }}
+      onClick={(e) => {
+        if (backdropMouseDown.current && e.target === e.currentTarget) onClose();
+        backdropMouseDown.current = false;
+      }}
+    >
+      <div
+        className="w-full max-w-2xl max-h-[92vh] bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5 shrink-0">
+          <div>
+            <h2 className="text-base font-semibold text-slate-800">Mail per l&apos;avvocato</h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Si apre il client email predefinito con oggetto e testo già compilati
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="px-5 py-4 space-y-4 overflow-y-auto">
+          {recipients.length > 0 && (
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              Destinatari: {recipients.join(", ")}
+            </div>
+          )}
+          <CopyField label="Oggetto" value={subject} />
+          <CopyField label="Corpo" value={body} html={bodyHtml} />
+        </div>
+        <div className="shrink-0 border-t border-slate-200 px-5 py-3 flex flex-col sm:flex-row gap-2.5 bg-slate-50/60">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-white transition-colors sm:flex-1"
+          >
+            Chiudi
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                await copyPlainAndHtml(full, fullHtml);
+              } catch {
+                /* ignore */
+              }
+            }}
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-white transition-colors sm:flex-1"
+          >
+            <Copy className="h-4 w-4" />
+            Copia tutto
+          </button>
+          <a
+            href={mailtoHref}
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#3aaeba] px-3 py-2 text-sm font-semibold text-white hover:bg-[#349aa5] transition-colors sm:flex-1"
+          >
+            <Mail className="h-4 w-4" />
+            Apri client email
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Edit Incontro Dialog ──────────────────────────────────────────────────────
 
 function EditIncontroDialog({ incontro, onClose }: { incontro: Incontro | null; onClose: () => void }) {
+  const backdropMouseDown = useRef(false);
+
   useEffect(() => {
     if (!incontro) return;
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -1316,35 +1684,50 @@ function EditIncontroDialog({ incontro, onClose }: { incontro: Incontro | null; 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onMouseDown={(e) => { backdropMouseDown.current = e.target === e.currentTarget; }}
+      onClick={(e) => {
+        if (backdropMouseDown.current && e.target === e.currentTarget) onClose();
+        backdropMouseDown.current = false;
+      }}
     >
-      <div className="w-full max-w-lg bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col">
-        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5">
+      <div
+        className="w-full max-w-3xl max-h-[92vh] bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5 shrink-0">
           <h2 className="text-base font-semibold text-slate-800">Modifica incontro</h2>
           <button type="button" onClick={onClose} className="rounded-md p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
             <X className="h-4 w-4" />
           </button>
         </div>
-        <Form method="post" onSubmit={onClose} className="px-5 py-4 space-y-4">
+        <Form method="post" onSubmit={onClose} className="px-5 py-4 space-y-4 overflow-y-auto">
           <input type="hidden" name="_action" value="update_incontro" />
           <input type="hidden" name="incontro_id" value={incontro.id} />
-          <div>
-            <label className={EDIT_LABEL}>Data e ora programmazione</label>
-            <input type="datetime-local" name="data_programmazione" defaultValue={toInputDatetime(incontro.data_programmazione)} className={EDIT_INPUT} />
-          </div>
-          <div>
-            <label className={EDIT_LABEL}>Link Google Meet</label>
-            <input
-              type="url"
-              name="link_incontro"
-              placeholder="https://meet.google.com/xxx-xxxx-xxx"
-              defaultValue={incontro.link_incontro}
-              className={EDIT_INPUT}
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className={EDIT_LABEL}>Data e ora programmazione</label>
+              <input type="datetime-local" name="data_programmazione" defaultValue={toInputDatetime(incontro.data_programmazione)} className={EDIT_INPUT} />
+            </div>
+            <div>
+              <label className={EDIT_LABEL}>Link Google Meet</label>
+              <input
+                type="url"
+                name="link_incontro"
+                placeholder="https://meet.google.com/xxx-xxxx-xxx"
+                defaultValue={incontro.link_incontro}
+                className={EDIT_INPUT}
+              />
+            </div>
           </div>
           <div>
             <label className={EDIT_LABEL}>Report</label>
-            <textarea name="report" rows={3} defaultValue={incontro.report} className={EDIT_INPUT} placeholder="Testo o HTML" />
+            <RichTextEditor
+              key={incontro.id}
+              name="report"
+              defaultValue={incontro.report || ""}
+              placeholder="Note, esito, punti discussi…"
+              initialHeight={280}
+            />
           </div>
           <div className="pt-1 flex gap-2.5">
             <button type="button" onClick={onClose} className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors">
@@ -1767,6 +2150,7 @@ type DialogMode =
   | { type: "editSoggetto"; parte: Parte }
   | { type: "addIncontro" }
   | { type: "editIncontro"; incontro: Incontro }
+  | { type: "mailIncontro"; incontro: Incontro }
   | { type: "addConvocazione" }
   | { type: "editConvocazione"; convocazione: ConvocazioneEdit }
   | { type: "addDocumento" }
@@ -1800,11 +2184,24 @@ export default function MediazioneDetail() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = (searchParams.get("tab") as (typeof TABS)[number]["id"]) || "parti";
   const [editMode, setEditMode] = useState(false);
+  const [oggettoEdit, setOggettoEdit] = useState(mediazione.oggetto ?? "");
   const [editingPartecipazioneId, setEditingPartecipazioneId] = useState<string | null>(null);
   const [dialogMode, setDialogMode] = useState<DialogMode>(null);
   const [saveToast, setSaveToast] = useState<{ kind: "saved" | "error"; detail?: string } | null>(null);
   const [saveToastVisible, setSaveToastVisible] = useState(false);
   const [saveToastLeaving, setSaveToastLeaving] = useState(false);
+
+  useEffect(() => {
+    if (editMode) setOggettoEdit(mediazione.oggetto ?? "");
+  }, [editMode, mediazione.oggetto]);
+
+  const competenzaNonAttiva = (() => {
+    const value = (mediazione.competenza ?? "").trim();
+    if (!value) return false;
+    return !competenzaOpzioni.some(
+      (o) => o.trim().toLowerCase() === value.toLowerCase()
+    );
+  })();
 
   const isSavingMediazione =
     navigation.state === "submitting" && navigation.formData?.get("_action") === "update";
@@ -1956,17 +2353,42 @@ export default function MediazioneDetail() {
             <h1 className="text-base sm:text-lg font-semibold text-slate-800">
               Mediazione {mediazione.rgm || mediazione.id}
             </h1>
-            {!editMode && (
-              <button
-                type="button"
-                onClick={() => setEditMode(true)}
-                className="inline-flex items-center justify-center rounded-lg bg-[#3aaeba] p-1.5 text-white hover:bg-[#349aa5]"
-                title="Modifica dati"
-                aria-label="Modifica dati"
-              >
-                <Pencil className="h-4 w-4" aria-hidden="true" />
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              <Form method="post">
+                <input type="hidden" name="_action" value="set_adesione" />
+                <input
+                  type="hidden"
+                  name="adesione"
+                  value={mediazione.adesione ? "false" : "true"}
+                />
+                <button
+                  type="submit"
+                  className={`inline-flex items-center rounded-lg px-2.5 py-1.5 text-xs font-medium ${
+                    mediazione.adesione
+                      ? "bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
+                      : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                  }`}
+                  title={
+                    mediazione.adesione
+                      ? "Rimuovi adesione"
+                      : "Segna adesione (notifica il mediatore se non sei tu)"
+                  }
+                >
+                  {mediazione.adesione ? "Adesione: sì" : "Segna adesione"}
+                </button>
+              </Form>
+              {!editMode && (
+                <button
+                  type="button"
+                  onClick={() => setEditMode(true)}
+                  className="inline-flex items-center justify-center rounded-lg bg-[#3aaeba] p-1.5 text-white hover:bg-[#349aa5]"
+                  title="Modifica dati"
+                  aria-label="Modifica dati"
+                >
+                  <Pencil className="h-4 w-4" aria-hidden="true" />
+                </button>
+              )}
+            </div>
           </div>
 
           {!editMode ? (
@@ -1989,17 +2411,51 @@ export default function MediazioneDetail() {
                 <dt className="font-medium text-slate-500 mb-0.5">Mediatore</dt>
                 <dd className="text-slate-900">{mediazione.mediatore_name}</dd>
               </div>
+              <div>
+                <dt className="font-medium text-slate-500 mb-0.5">Adesione</dt>
+                <dd className="text-slate-900">{mediazione.adesione ? "Sì" : "No"}</dd>
+              </div>
+              <div>
+                <dt className="font-medium text-slate-500 mb-0.5">Trasmessa</dt>
+                <dd className="text-slate-900">{mediazione.trasmessa ? "Sì" : "No"}</dd>
+              </div>
+              <div>
+                <dt className="font-medium text-slate-500 mb-0.5">Proposta mediatore</dt>
+                <dd className="text-slate-900">{mediazione.proposta_mediatore ? "Sì" : "No"}</dd>
+              </div>
+              <div>
+                <dt className="font-medium text-slate-500 mb-0.5">N. esonerati gratuito patrocinio</dt>
+                <dd className="text-slate-900">{mediazione.numero_esonerati_gratuito_patrocinio}</dd>
+              </div>
               <div className="sm:col-span-2">
-                <dt className="font-medium text-slate-500 mb-0.5">Oggetto</dt>
+                <dt className="font-medium text-slate-500 mb-0.5">Oggetto / Materia</dt>
                 <dd className="text-slate-900 line-clamp-3">{mediazione.oggetto || "—"}</dd>
               </div>
+              {mediazione.oggetto?.toLowerCase() === "altro" && (
+                <div className="sm:col-span-2">
+                  <dt className="font-medium text-slate-500 mb-0.5">Materia (altro)</dt>
+                  <dd className="text-slate-900 line-clamp-3">{mediazione.materia_altro || "—"}</dd>
+                </div>
+              )}
               <div>
                 <dt className="font-medium text-slate-500 mb-0.5">Valore</dt>
                 <dd className="text-slate-900">{mediazione.valore || "—"}</dd>
               </div>
               <div>
                 <dt className="font-medium text-slate-500 mb-0.5">Competenza</dt>
-                <dd className="text-slate-900">{mediazione.competenza || "—"}</dd>
+                <dd className="text-slate-900 inline-flex items-center gap-1.5">
+                  <span>{mediazione.competenza || "—"}</span>
+                  {competenzaNonAttiva && (
+                    <span
+                      className="tooltip tooltip-top inline-flex cursor-help"
+                      data-tip="Non abbiamo questa competenza"
+                      title="Non abbiamo questa competenza"
+                      aria-label="Non abbiamo questa competenza"
+                    >
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" aria-hidden="true" />
+                    </span>
+                  )}
+                </dd>
               </div>
               <div>
                 <dt className="font-medium text-slate-500 mb-0.5">Modalità mediazione</dt>
@@ -2121,13 +2577,57 @@ export default function MediazioneDetail() {
                     </p>
                   </dd>
                 </div>
+                <div>
+                  <dt className="font-medium text-slate-500 mb-0.5">Trasmessa</dt>
+                  <dd className="pt-1.5">
+                    <label className="inline-flex items-center gap-2 text-slate-900">
+                      <input
+                        type="checkbox"
+                        name="trasmessa"
+                        value="true"
+                        defaultChecked={mediazione.trasmessa}
+                        className="rounded border-slate-300"
+                      />
+                      Sì
+                    </label>
+                  </dd>
+                </div>
+                <div>
+                  <dt className="font-medium text-slate-500 mb-0.5">Proposta mediatore</dt>
+                  <dd className="pt-1.5">
+                    <label className="inline-flex items-center gap-2 text-slate-900">
+                      <input
+                        type="checkbox"
+                        name="proposta_mediatore"
+                        value="true"
+                        defaultChecked={mediazione.proposta_mediatore}
+                        className="rounded border-slate-300"
+                      />
+                      Sì
+                    </label>
+                  </dd>
+                </div>
+                <div>
+                  <dt className="font-medium text-slate-500 mb-0.5">N. esonerati gratuito patrocinio</dt>
+                  <dd>
+                    <input
+                      name="numero_esonerati_gratuito_patrocinio"
+                      type="number"
+                      min={0}
+                      step={1}
+                      defaultValue={mediazione.numero_esonerati_gratuito_patrocinio}
+                      className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
+                    />
+                  </dd>
+                </div>
                 <div className="sm:col-span-2">
                   <dt className="font-medium text-slate-500 mb-0.5">Oggetto / Materia</dt>
                   <dd>
                     <input
                       name="oggetto"
                       list="materia-list"
-                      defaultValue={mediazione.oggetto}
+                      value={oggettoEdit}
+                      onChange={(e) => setOggettoEdit(e.target.value)}
                       className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
                     />
                     <datalist id="materia-list">
@@ -2135,6 +2635,19 @@ export default function MediazioneDetail() {
                     </datalist>
                   </dd>
                 </div>
+                {oggettoEdit.trim().toLowerCase() === "altro" && (
+                  <div className="sm:col-span-2">
+                    <dt className="font-medium text-slate-500 mb-0.5">Materia (altro)</dt>
+                    <dd>
+                      <input
+                        name="materia_altro"
+                        defaultValue={mediazione.materia_altro}
+                        placeholder="Specifica la materia"
+                        className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
+                      />
+                    </dd>
+                  </div>
+                )}
                 <div>
                   <dt className="font-medium text-slate-500 mb-0.5">Valore</dt>
                   <dd>
@@ -2150,7 +2663,19 @@ export default function MediazioneDetail() {
                   </dd>
                 </div>
                 <div>
-                  <dt className="font-medium text-slate-500 mb-0.5">Competenza</dt>
+                  <dt className="font-medium text-slate-500 mb-0.5 inline-flex items-center gap-1.5">
+                    Competenza
+                    {competenzaNonAttiva && (
+                      <span
+                        className="tooltip tooltip-top inline-flex cursor-help"
+                        data-tip="Non abbiamo questa competenza"
+                        title="Non abbiamo questa competenza"
+                        aria-label="Non abbiamo questa competenza"
+                      >
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" aria-hidden="true" />
+                      </span>
+                    )}
+                  </dt>
                   <dd>
                     <input
                       name="competenza"
@@ -2161,6 +2686,11 @@ export default function MediazioneDetail() {
                     <datalist id="competenza-list">
                       {competenzaOpzioni.map((o) => <option key={o} value={o} />)}
                     </datalist>
+                    {competenzaNonAttiva && (
+                      <p className="mt-1 text-[11px] text-amber-600">
+                        Non abbiamo questa competenza.
+                      </p>
+                    )}
                   </dd>
                 </div>
                 <div>
@@ -2434,18 +2964,31 @@ export default function MediazioneDetail() {
                     </div>
                   </div>
                   {inc.link_incontro && (
-                    <a
-                      href={inc.link_incontro}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-1 inline-flex items-center gap-1 text-sm text-[#3aaeba] hover:underline"
-                    >
-                      Apri Google Meet
-                    </a>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <a
+                        href={inc.link_incontro as string}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-sm text-[#3aaeba] hover:underline"
+                      >
+                        Apri Google Meet
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setDialogMode({ type: "mailIncontro", incontro: inc as Incontro })
+                        }
+                        className="inline-flex items-center gap-1 text-sm text-slate-600 hover:text-[#3aaeba] transition-colors"
+                        title="Mostra mail per l'avvocato"
+                      >
+                        <Mail className="h-3.5 w-3.5" />
+                        Mail avvocato
+                      </button>
+                    </div>
                   )}
                   {inc.report && (
                     <div
-                      className="mt-1 text-slate-700 prose prose-sm max-w-none"
+                      className="mt-2 rounded-md border border-slate-100 bg-slate-50/70 px-3 py-2 text-sm text-slate-700 [&_a]:text-[#3aaeba] [&_a]:underline [&_ul]:my-1 [&_ol]:my-1 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-5 [&_ol]:pl-5 [&_h2]:mb-1 [&_h2]:mt-1 [&_h2]:text-sm [&_h2]:font-semibold"
                       dangerouslySetInnerHTML={{ __html: inc.report }}
                     />
                   )}
@@ -2844,6 +3387,28 @@ export default function MediazioneDetail() {
       {/* ── Edit Incontro dialog ── */}
       <EditIncontroDialog
         incontro={dialogMode?.type === "editIncontro" ? dialogMode.incontro : null}
+        onClose={closeDialog}
+      />
+
+      {/* ── Mail avvocato dialog ── */}
+      <MailAvvocatoDialog
+        incontro={dialogMode?.type === "mailIncontro" ? dialogMode.incontro : null}
+        rgm={mediazione.rgm || ""}
+        partiLabel={[...partecipazioni]
+          .sort((a, b) => {
+            const rank = (v: string) => (v === "Istante" ? 0 : v === "Chiamato" ? 1 : 2);
+            return rank(a.istante_o_chiamato) - rank(b.istante_o_chiamato);
+          })
+          .map(partyShortName)
+          .filter(Boolean)
+          .join(" ")}
+        recipients={[
+          ...new Set(
+            partecipazioni.flatMap((p) =>
+              p.avvocati_details.map((a) => (a.pec ?? "").trim()).filter(Boolean)
+            )
+          ),
+        ]}
         onClose={closeDialog}
       />
 
