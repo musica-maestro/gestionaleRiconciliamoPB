@@ -29,7 +29,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
     if (!isActiveUser(record)) {
       pb.authStore.clear();
-      return json({ error: "Account disattivato. Contatta l'amministratore." }, 403);
+      return json({ error: "Impossibile accedere. Ritenta il login." }, 403);
     }
 
     const session = await getSession(request.headers.get("Cookie"));
@@ -63,7 +63,9 @@ export async function action({ request }: ActionFunctionArgs) {
 export default function Login() {
   const actionData = useActionData<typeof action>();
   const [searchParams] = useSearchParams();
-  const error = actionData?.error ?? searchParams.get("error") === "disabled" ? "Account disattivato." : null;
+  const error =
+    actionData?.error ??
+    (searchParams.get("error") === "disabled" ? "Impossibile accedere. Ritenta il login." : null);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-base-200 p-4">
