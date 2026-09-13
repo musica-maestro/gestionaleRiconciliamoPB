@@ -272,7 +272,7 @@ export async function importRows(
             codice_fiscale: row.avvocatoIstante.codice_fiscale,
             pec: row.avvocatoIstante.pec,
             telefono: row.avvocatoIstante.telefono,
-            foro_di_appartenenza: row.avvocatoIstante.foro_di_appartenenza,
+            indirizzo: row.avvocatoIstante.indirizzo,
           });
           avvocatoId = avv.id;
         }

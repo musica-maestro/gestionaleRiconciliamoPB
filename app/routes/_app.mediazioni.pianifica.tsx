@@ -1,12 +1,18 @@
 import { useMemo, useRef, useState, useEffect } from "react";
 import { Link, useFetcher, useLoaderData, useSearchParams } from "@remix-run/react";
 import { json, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
-import { CalendarDays, ChevronLeft, ChevronRight, Clock, Search } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, Clock } from "lucide-react";
 import { getCurrentRole, requireUser } from "~/lib/auth.server";
 import { createPB } from "~/lib/pocketbase.server";
 import { callRiconciliamoApi } from "~/lib/riconciliamo-api.server";
 import { MultiDateCalendarPicker } from "~/components/multi-date-calendar-picker";
 import { TimeRangeBar, type TimeRange } from "~/components/time-range-bar";
+import {
+  FilterTextInput,
+  FilterableTable,
+  filterableTableHeaderLabelClass,
+  filterableTableThClass,
+} from "~/components/data-table";
 
 export const meta = () => [{ title: "Pianifica incontri" }];
 
@@ -18,6 +24,7 @@ function isValidWindow(w: { from: string; to: string }) {
 }
 
 const PER_PAGE = 10;
+const FILTER_FORM_ID = "pianifica-filters-form";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const user = await requireUser(request);
@@ -25,20 +32,27 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { pb } = await createPB(request);
 
   const url = new URL(request.url);
-  const searchTerm = url.searchParams.get("q")?.trim() ?? "";
+  const rgm = url.searchParams.get("rgm")?.trim() ?? "";
+  const oggetto = url.searchParams.get("oggetto")?.trim() ?? "";
+  const istante = url.searchParams.get("istante")?.trim() ?? "";
+  const chiamato = url.searchParams.get("chiamato")?.trim() ?? "";
+  const codice_cliente = url.searchParams.get("codice_cliente")?.trim() ?? "";
   const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1", 10) || 1);
 
   const filterParts: string[] = [`stato = "assegnata"`];
   if (role === "mediatore") filterParts.push(`mediatore = "${user.id}"`);
-  if (searchTerm) {
+  if (rgm) filterParts.push(pb.filter("rgm ~ {:rgm}", { rgm }));
+  if (oggetto) filterParts.push(pb.filter("oggetto ~ {:oggetto}", { oggetto }));
+  if (istante) filterParts.push(pb.filter("istanti_testo ~ {:istante}", { istante }));
+  if (chiamato) filterParts.push(pb.filter("chiamati_testo ~ {:chiamato}", { chiamato }));
+  if (codice_cliente) {
     filterParts.push(
-      pb.filter(
-        "(rgm ~ {:q} || oggetto ~ {:q} || istanti_testo ~ {:q} || chiamati_testo ~ {:q} || mediatore_name ~ {:q})",
-        { q: searchTerm },
-      ),
+      pb.filter("codice_univoco_cliente ~ {:codice_cliente}", { codice_cliente }),
     );
   }
   const filter = filterParts.join(" && ");
+
+  const baseFilterParts = filterParts.filter((_, i) => i < (role === "mediatore" ? 2 : 1));
 
   const [result, countResult] = await Promise.all([
     pb.collection("mediazioni_view").getList(page, PER_PAGE, {
@@ -47,7 +61,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       requestKey: null,
     }),
     pb.collection("mediazioni_view").getList(1, 1, {
-      filter: filterParts.filter((_, i) => i < (role === "mediatore" ? 2 : 1)).join(" && "),
+      filter: baseFilterParts.join(" && "),
       fields: "id",
       requestKey: null,
     }),
@@ -58,16 +72,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
       id: String(m.id),
       rgm: String(m.rgm ?? "—"),
       oggetto: String(m.oggetto ?? "—"),
-      mediatore_name: String(m.mediatore_name ?? "—"),
       istanti: m.istanti_testo ? String(m.istanti_testo) : "—",
       chiamati: m.chiamati_testo ? String(m.chiamati_testo) : "—",
+      codice_cliente:
+        String((m as { codice_univoco_cliente?: string }).codice_univoco_cliente ?? "").trim() ||
+        "—",
     })),
     page,
     totalItems: result.totalItems,
     totalPages: Math.max(1, Math.ceil(result.totalItems / PER_PAGE)),
     totalAll: countResult.totalItems,
     role: role ?? "",
-    q: searchTerm,
+    filters: { rgm, oggetto, istante, chiamato, codice_cliente },
   });
 }
 
@@ -154,7 +170,7 @@ function SectionCard({
 }
 
 export default function PianificaMediazioni() {
-  const { items, page, totalPages, totalItems, q } = useLoaderData<typeof loader>();
+  const { items, page, totalPages, totalItems, filters } = useLoaderData<typeof loader>();
   const [searchParams, setSearchParams] = useSearchParams();
   const fetcher = useFetcher<typeof action>();
   const selectionIdsFetcher = useFetcher<{ ids?: string[]; error?: string }>();
@@ -171,8 +187,6 @@ export default function PianificaMediazioni() {
   ]);
   const [durationMin, setDurationMin] = useState(30);
   const [parallel, setParallel] = useState(1);
-  const [searchInput, setSearchInput] = useState(q);
-  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const occupancyDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const headerCheckboxRef = useRef<HTMLInputElement>(null);
@@ -282,18 +296,6 @@ export default function PianificaMediazioni() {
     setSearchParams(next);
   }
 
-  function handleSearchChange(value: string) {
-    setSearchInput(value);
-    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-    searchDebounceRef.current = setTimeout(() => {
-      const next = new URLSearchParams(searchParams);
-      if (value) next.set("q", value);
-      else next.delete("q");
-      next.set("page", "1");
-      setSearchParams(next);
-    }, 350);
-  }
-
   function submit() {
     fetcher.submit(
       {
@@ -314,7 +316,7 @@ export default function PianificaMediazioni() {
         <div>
           <h1 className="text-2xl font-semibold text-base-content">Pianifica incontri</h1>
           <p className="text-sm text-base-content/60 mt-0.5">
-            Scegli le pratiche, i giorni e le fasce. Gli incontri si distribuiscono sui giorni/orari più vuoti (parallelo minimo); le pratiche passano poi in <strong>Da notificare</strong>.
+            Scegli le pratiche, i giorni e le fasce. Gli incontri si distribuiscono sui giorni/orari più vuoti (parallelo minimo); le pratiche passano poi in <strong>Da convocare</strong>.
           </p>
         </div>
         {/* Riepilogo inline */}
@@ -333,127 +335,161 @@ export default function PianificaMediazioni() {
 
       {/* Griglia principale 2×2 */}
       <div className="grid xl:grid-cols-12 xl:grid-rows-[1fr_auto] gap-3 items-stretch">
-        {/* Riga 1 sinistra: ricerca + tabella */}
+        {/* Riga 1 sinistra: filtri colonna + tabella */}
         <div className="xl:col-span-7 xl:row-span-1 flex flex-col gap-3">
-          {/* Ricerca */}
-          <label className="input input-bordered input-sm flex items-center gap-2 w-full">
-            <Search className="h-4 w-4 text-base-content/40" />
-            <input
-              type="text"
-              className="grow bg-transparent outline-none"
-              placeholder="Cerca RGM, oggetto, istante, chiamato, mediatore…"
-              value={searchInput}
-              onChange={(e) => handleSearchChange(e.target.value)}
-            />
-          </label>
-
-          {/* Tabella */}
-          <div className="rounded-xl border-2 border-base-200 bg-base-100 shadow-sm overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="table table-xs w-full">
-                <thead>
-                  <tr className="text-base-content/70">
-                    <th className="w-8">
-                      <input
-                        ref={headerCheckboxRef}
-                        type="checkbox"
-                        className="checkbox checkbox-sm"
-                        checked={headerCheckboxChecked}
-                        disabled={isSelectionIdsLoading || pageIds.length === 0}
-                        onChange={handleCycleSelection}
-                        title="1 click: pagina · 2: tutte · 3: nessuna"
-                        aria-label="Seleziona pagina, poi tutte, poi nessuna"
-                      />
-                    </th>
-                    <th>RGM</th>
-                    <th>Oggetto</th>
-                    <th>Istanti</th>
-                    <th>Chiamati</th>
-                    <th className="hidden sm:table-cell">Mediatore</th>
+          <FilterableTable
+            id={FILTER_FORM_ID}
+            method="get"
+            hiddenFields={{ page: "1" }}
+            className="!shadow-sm"
+            footer={
+              <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-base-200 text-xs text-base-content/60">
+                <span>
+                  Pag. {page}/{totalPages} ({totalItems})
+                  {needed > 0 && (
+                    <>
+                      {" "}
+                      · {needed} selezionat{needed === 1 ? "a" : "e"}
+                      {allListSelected ? " (tutte)" : ""}
+                      {isSelectionIdsLoading ? " …" : ""}
+                    </>
+                  )}
+                </span>
+                {totalPages > 1 && (
+                  <div className="flex items-center gap-0.5">
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-ghost btn-square"
+                      disabled={page <= 1}
+                      onClick={() => goToPage(page - 1)}
+                      aria-label="Precedente"
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                    </button>
+                    {(() => {
+                      const maxButtons = 7;
+                      let start = Math.max(1, page - Math.floor(maxButtons / 2));
+                      const end = Math.min(totalPages, start + maxButtons - 1);
+                      start = Math.max(1, end - maxButtons + 1);
+                      return Array.from({ length: end - start + 1 }, (_, i) => start + i).map((p) => (
+                        <button
+                          key={p}
+                          type="button"
+                          className={`btn btn-xs min-w-[1.5rem] ${p === page ? "btn-primary" : "btn-ghost"}`}
+                          onClick={() => goToPage(p)}
+                        >
+                          {p}
+                        </button>
+                      ));
+                    })()}
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-ghost btn-square"
+                      disabled={page >= totalPages}
+                      onClick={() => goToPage(page + 1)}
+                      aria-label="Successiva"
+                    >
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            }
+          >
+            <table className="table table-xs w-full [&_td]:align-top">
+              <thead>
+                <tr className="text-base-content/70">
+                  <th className={`${filterableTableThClass} w-8`}>
+                    <input
+                      ref={headerCheckboxRef}
+                      type="checkbox"
+                      className="checkbox checkbox-sm"
+                      checked={headerCheckboxChecked}
+                      disabled={isSelectionIdsLoading || pageIds.length === 0}
+                      onChange={handleCycleSelection}
+                      title="1 click: pagina · 2: tutte · 3: nessuna"
+                      aria-label="Seleziona pagina, poi tutte, poi nessuna"
+                    />
+                  </th>
+                  <th className={`${filterableTableThClass} min-w-[5rem]`}>
+                    <div className={filterableTableHeaderLabelClass}>RGM</div>
+                    <FilterTextInput name="rgm" defaultValue={filters.rgm} placeholder="RGM…" />
+                  </th>
+                  <th className={`${filterableTableThClass} min-w-[8rem]`}>
+                    <div className={filterableTableHeaderLabelClass}>Oggetto</div>
+                    <FilterTextInput
+                      name="oggetto"
+                      defaultValue={filters.oggetto}
+                      placeholder="Oggetto…"
+                    />
+                  </th>
+                  <th className={`${filterableTableThClass} min-w-[7rem]`}>
+                    <div className={filterableTableHeaderLabelClass}>Istanti</div>
+                    <FilterTextInput
+                      name="istante"
+                      defaultValue={filters.istante}
+                      placeholder="Istante…"
+                    />
+                  </th>
+                  <th className={`${filterableTableThClass} min-w-[7rem]`}>
+                    <div className={filterableTableHeaderLabelClass}>Chiamati</div>
+                    <FilterTextInput
+                      name="chiamato"
+                      defaultValue={filters.chiamato}
+                      placeholder="Chiamato…"
+                    />
+                  </th>
+                  <th className={`${filterableTableThClass} min-w-[7rem]`}>
+                    <div className={filterableTableHeaderLabelClass}>Codice cliente</div>
+                    <FilterTextInput
+                      name="codice_cliente"
+                      defaultValue={filters.codice_cliente}
+                      placeholder="Codice…"
+                    />
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="text-center py-8 text-base-content/55">
+                      Nessuna mediazione trovata.
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {items.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="text-center py-8 text-base-content/55">
-                        Nessuna mediazione trovata.
+                ) : (
+                  items.map((m) => (
+                    <tr key={m.id} className="hover">
+                      <td>
+                        <input
+                          type="checkbox"
+                          className="checkbox checkbox-sm"
+                          checked={selectedIds.includes(m.id)}
+                          onChange={() => toggleSelect(m.id)}
+                          aria-label={`Seleziona ${m.rgm}`}
+                        />
+                      </td>
+                      <td className="font-medium whitespace-nowrap">{m.rgm}</td>
+                      <td className="max-w-[10rem] truncate" title={m.oggetto}>
+                        {m.oggetto}
+                      </td>
+                      <td className="max-w-[8rem] truncate" title={m.istanti}>
+                        {m.istanti}
+                      </td>
+                      <td className="max-w-[8rem] truncate" title={m.chiamati}>
+                        {m.chiamati}
+                      </td>
+                      <td
+                        className="font-mono text-xs max-w-[8rem] truncate"
+                        title={m.codice_cliente !== "—" ? m.codice_cliente : undefined}
+                      >
+                        {m.codice_cliente}
                       </td>
                     </tr>
-                  ) : (
-                    items.map((m) => (
-                      <tr key={m.id} className="hover">
-                        <td>
-                          <input
-                            type="checkbox"
-                            className="checkbox checkbox-sm"
-                            checked={selectedIds.includes(m.id)}
-                            onChange={() => toggleSelect(m.id)}
-                            aria-label={`Seleziona ${m.rgm}`}
-                          />
-                        </td>
-                        <td className="font-medium whitespace-nowrap">{m.rgm}</td>
-                        <td className="max-w-[10rem] truncate" title={m.oggetto}>{m.oggetto}</td>
-                        <td className="max-w-[8rem] truncate" title={m.istanti}>{m.istanti}</td>
-                        <td className="max-w-[8rem] truncate" title={m.chiamati}>{m.chiamati}</td>
-                        <td className="hidden sm:table-cell max-w-[7rem] truncate" title={m.mediatore_name}>
-                          {m.mediatore_name}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Paginazione + selezione */}
-            <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-base-200 text-xs text-base-content/60">
-              <span>
-                Pag. {page}/{totalPages} ({totalItems})
-                {needed > 0 && (
-                  <> · {needed} selezionat{needed === 1 ? "a" : "e"}{allListSelected ? " (tutte)" : ""}{isSelectionIdsLoading ? " …" : ""}</>
+                  ))
                 )}
-              </span>
-              {totalPages > 1 && (
-                <div className="flex items-center gap-0.5">
-                  <button
-                    type="button"
-                    className="btn btn-xs btn-ghost btn-square"
-                    disabled={page <= 1}
-                    onClick={() => goToPage(page - 1)}
-                    aria-label="Precedente"
-                  >
-                    <ChevronLeft className="h-3.5 w-3.5" />
-                  </button>
-                  {(() => {
-                    const maxButtons = 7;
-                    let start = Math.max(1, page - Math.floor(maxButtons / 2));
-                    const end = Math.min(totalPages, start + maxButtons - 1);
-                    start = Math.max(1, end - maxButtons + 1);
-                    return Array.from({ length: end - start + 1 }, (_, i) => start + i).map((p) => (
-                      <button
-                        key={p}
-                        type="button"
-                        className={`btn btn-xs min-w-[1.5rem] ${p === page ? "btn-primary" : "btn-ghost"}`}
-                        onClick={() => goToPage(p)}
-                      >
-                        {p}
-                      </button>
-                    ));
-                  })()}
-                  <button
-                    type="button"
-                    className="btn btn-xs btn-ghost btn-square"
-                    disabled={page >= totalPages}
-                    onClick={() => goToPage(page + 1)}
-                    aria-label="Successiva"
-                  >
-                    <ChevronRight className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-
+              </tbody>
+            </table>
+          </FilterableTable>
         </div>
 
         {/* Riga 1 destra: calendario */}
@@ -526,8 +562,8 @@ export default function PianificaMediazioni() {
         <div className="alert alert-success shadow-sm">
           <span>
             Creati {(fetcher.data as { created?: number }).created ?? 0} incontri.{" "}
-            <Link to="/mediazioni?tab=da-notificare" className="link font-medium">
-              Vai a Da notificare
+            <Link to="/mediazioni?tab=da-convocare" className="link font-medium">
+              Vai a Da convocare
             </Link>
           </span>
         </div>

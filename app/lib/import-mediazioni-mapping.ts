@@ -148,7 +148,7 @@ export interface ImportRow {
     codice_fiscale?: string;
     pec?: string;
     telefono?: string;
-    foro_di_appartenenza?: string;
+    indirizzo?: string;
   };
   parteChiamato: {
     tipo: "Fisica";
@@ -221,7 +221,7 @@ export function mapExcelRowsToImport(jsonRows: Record<string, unknown>[]): Impor
         codice_fiscale: getStr(row, "CF Avvocato") || undefined,
         pec: getStr(row, "PEC Avv") || undefined,
         telefono: getStr(row, "Recapito Telefonico Avv.") || undefined,
-        foro_di_appartenenza: getStr(row, "Indirizzo avvocato") || undefined,
+        indirizzo: getStr(row, "Indirizzo avvocato") || undefined,
       };
 
       const addr = getIndirizzoChiamato(row);

@@ -8,16 +8,21 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { pb } = await createPB(request);
 
   const url = new URL(request.url);
-  const searchTerm = url.searchParams.get("q")?.trim() ?? "";
+  const rgm = url.searchParams.get("rgm")?.trim() ?? "";
+  const oggetto = url.searchParams.get("oggetto")?.trim() ?? "";
+  const istante = url.searchParams.get("istante")?.trim() ?? "";
+  const chiamato = url.searchParams.get("chiamato")?.trim() ?? "";
+  const codice_cliente = url.searchParams.get("codice_cliente")?.trim() ?? "";
 
   const filterParts: string[] = [`stato = "assegnata"`];
   if (role === "mediatore") filterParts.push(`mediatore = "${user.id}"`);
-  if (searchTerm) {
+  if (rgm) filterParts.push(pb.filter("rgm ~ {:rgm}", { rgm }));
+  if (oggetto) filterParts.push(pb.filter("oggetto ~ {:oggetto}", { oggetto }));
+  if (istante) filterParts.push(pb.filter("istanti_testo ~ {:istante}", { istante }));
+  if (chiamato) filterParts.push(pb.filter("chiamati_testo ~ {:chiamato}", { chiamato }));
+  if (codice_cliente) {
     filterParts.push(
-      pb.filter(
-        "(rgm ~ {:q} || oggetto ~ {:q} || istanti_testo ~ {:q} || chiamati_testo ~ {:q} || mediatore_name ~ {:q})",
-        { q: searchTerm },
-      ),
+      pb.filter("codice_univoco_cliente ~ {:codice_cliente}", { codice_cliente }),
     );
   }
   const filter = filterParts.join(" && ");

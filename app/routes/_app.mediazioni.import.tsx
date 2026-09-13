@@ -260,7 +260,7 @@ export default function ImportMediazioni() {
                     <th className="min-w-[100px]">Competenza</th>
                     <th className="min-w-[120px]">Modalità</th>
                     <th className="min-w-[210px]">Modalità conv.</th>
-                    <th className="min-w-[210px]">Motivo deposito</th>
+                    <th className="min-w-[210px]">Motivazione deposito</th>
                     <th className="min-w-[120px]">Link</th>
                   </tr>
                 </thead>

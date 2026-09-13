@@ -5,7 +5,6 @@ export const ESITO_FINALE_VALUES = [
   "Chiusa d'ufficio",
   "Ritirata",
   "Nessuna risposta",
-  "Non consegnabile",
   "Nessuna adesione",
 ] as const;
 
@@ -24,12 +23,19 @@ export const ESITO_FINALE_COLORS: Record<EsitoFinale, string> = {
   "Chiusa d'ufficio": "#86efac", // light green
   Ritirata: "#166534", // dark green
   "Nessuna risposta": "#ec4899", // pink
-  "Non consegnabile": "#dc2626", // red
   "Nessuna adesione": "#111827", // black
 };
 
 export const CALENDAR_COLOR_DA_NOTIFICARE = "#facc15"; // yellow
 export const CALENDAR_COLOR_NO_ESITO = "#d1d5db"; // light gray
+
+/** Valori stato raccomandata sulle convocazioni. */
+export const STATO_RACCOMANDATA_VALUES = [
+  "Consegnata",
+  "Non consegnabile",
+] as const;
+
+export type StatoRaccomandata = (typeof STATO_RACCOMANDATA_VALUES)[number];
 
 function normalizeKey(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, " ");
@@ -42,10 +48,9 @@ const ALIASES: Record<string, EsitoFinale> = {
   "chiusa d ufficio": "Chiusa d'ufficio",
   ritirata: "Ritirata",
   "nessuna risposta": "Nessuna risposta",
-  "non consegnabile": "Non consegnabile",
   "nessuna adesione": "Nessuna adesione",
   improcedibile: "Ritirata",
-  // legacy: treat old "In corso" as empty (open)
+  // legacy: treat old "In corso" / "Non consegnabile" as empty (moved to stato_raccomandata)
 };
 
 const BY_KEY = new Map<string, EsitoFinale>(
@@ -57,7 +62,8 @@ export function normalizeEsitoFinale(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return "";
   const key = normalizeKey(trimmed);
-  if (key === "in corso") return "";
+  // Legacy values no longer used as esito (open / stato_raccomandata)
+  if (key === "in corso" || key === "non consegnabile") return "";
   return ALIASES[key] ?? BY_KEY.get(key) ?? trimmed;
 }
 

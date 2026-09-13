@@ -19,6 +19,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const fields = fieldsParam.length > 0 ? fieldsParam : (["rgm", "oggetto", "valore", "istanti", "istanti_cf", "chiamati", "chiamati_cf", "avvocati", "competenza", "nota", "modalita_mediazione", "motivazione_deposito", "modalita_convocazione", "mediatore_name", "esito_finale", "data_protocollo", "data_chiusura", "data_avvio_entro"] as ExportFieldKey[]);
 
   const rgm = url.searchParams.get("rgm")?.trim() ?? "";
+  const codice_cliente = url.searchParams.get("codice_cliente")?.trim() ?? "";
   const oggetto = url.searchParams.get("oggetto")?.trim() ?? "";
   const valore = url.searchParams.get("valore")?.trim() ?? "";
   const esito = url.searchParams.get("esito")?.trim() ?? "";
@@ -40,6 +41,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const filterParts: string[] = [];
   if (role === "mediatore") filterParts.push(`mediatore = "${user.id}"`);
   if (rgm) filterParts.push(pb.filter("rgm ~ {:rgm}", { rgm }));
+  if (codice_cliente) {
+    filterParts.push(
+      pb.filter("codice_univoco_cliente ~ {:codice_cliente}", { codice_cliente }),
+    );
+  }
   if (oggetto) filterParts.push(pb.filter("oggetto ~ {:oggetto}", { oggetto }));
   if (valore) filterParts.push(pb.filter("valore ~ {:valore}", { valore }));
   if (esito) filterParts.push(`esito_finale = "${esito}"`);

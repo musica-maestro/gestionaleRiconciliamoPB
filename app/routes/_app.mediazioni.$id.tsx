@@ -15,7 +15,7 @@ import { createPB } from "~/lib/pocketbase.server";
 import { AddParteDialog } from "~/components/add-parte-dialog";
 import { AddAvvocatoDialog } from "~/components/add-avvocato-dialog";
 import { RichTextEditor } from "~/components/rich-text-editor";
-import { ESITO_FINALE_FORM_OPTIONS, normalizeEsitoFinale } from "~/lib/esito-finale";
+import { ESITO_FINALE_FORM_OPTIONS, normalizeEsitoFinale, STATO_RACCOMANDATA_VALUES } from "~/lib/esito-finale";
 import { createLetteraIncaricoForMediazione } from "~/lib/lettera-incarico.server";
 
 // Converts a "YYYY-MM-DDTHH:MM" string (interpreted as Europe/Rome local time) to a
@@ -351,6 +351,10 @@ export async function action({ request, params }: ActionFunctionArgs) {
       partecipazione: partecipazione_id,
       data_invio: formData.get("data_invio") ? String(formData.get("data_invio")) : undefined,
       tipologia: String(formData.get("tipologia") ?? "PEC"),
+      numero_raccomandata: String(formData.get("numero_raccomandata") ?? "").trim() || undefined,
+      link_tracciamento_poste: String(formData.get("link_tracciamento_poste") ?? "").trim() || undefined,
+      stato_raccomandata: String(formData.get("stato_raccomandata") ?? "").trim() || undefined,
+      motivo_raccomandata: String(formData.get("motivo_raccomandata") ?? "").trim() || undefined,
       nota: String(formData.get("nota") ?? "").trim() || undefined,
     });
     // Convocazione = notifica alle parti → passa in Aperte
@@ -366,7 +370,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
       report: String(formData.get("report") ?? "").trim() || undefined,
       link_incontro: String(formData.get("link_incontro") ?? "").trim() || undefined,
     });
-    // Primo incontro da Da pianificare → Da notificare
+    // Primo incontro da Da pianificare → Da convocare
     const stato = String((mediazione as { stato?: string }).stato ?? "");
     if (stato === "assegnata" || stato === "") {
       await pb.collection("mediazioni").update(id, { stato: "da_notificare" });
@@ -461,6 +465,10 @@ export async function action({ request, params }: ActionFunctionArgs) {
     await pb.collection("convocazioni").update(convocazione_id, {
       data_invio: formData.get("data_invio") ? String(formData.get("data_invio")) : undefined,
       tipologia: String(formData.get("tipologia") ?? "PEC"),
+      numero_raccomandata: String(formData.get("numero_raccomandata") ?? "").trim() || null,
+      link_tracciamento_poste: String(formData.get("link_tracciamento_poste") ?? "").trim() || null,
+      stato_raccomandata: String(formData.get("stato_raccomandata") ?? "").trim() || null,
+      motivo_raccomandata: String(formData.get("motivo_raccomandata") ?? "").trim() || null,
       nota: String(formData.get("nota") ?? "").trim() || undefined,
     });
     return redirect(`/mediazioni/${id}?tab=convocazioni`);
@@ -538,6 +546,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     motivazioneDepositoResp,
     modalitaConvocazioneResp,
     materiaResp,
+    motivoRaccomandataResp,
     utentiResp,
   ] = await Promise.all([
     safeGetFullList(() =>
@@ -580,6 +589,9 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     ),
     safeGetFullList(() =>
       pb.collection("materia_opzioni").getFullList({ filter: "attivo = true", sort: "nome" })
+    ),
+    safeGetFullList(() =>
+      pb.collection("motivo_raccomandata_opzioni").getFullList({ filter: "attivo = true", sort: "nome" })
     ),
     canEditMediatore
       ? safeGetFullList(() =>
@@ -651,12 +663,21 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       soggetto_numero_civico: soggetto?.numero_civico || undefined,
       avvocati_details: avvocatiDetails,
       avvocati_ids: avvocatiIds,
-      convocazioni: (convocazioniByPartec[p.id as string] ?? []) as Array<{
-        id: string;
-        data_invio?: string;
-        tipologia?: string;
-        nota?: string;
-      }>,
+      convocazioni: (convocazioniByPartec[p.id as string] ?? []).map((c) => {
+        const conv = c as Record<string, unknown>;
+        return {
+          id: String(conv.id),
+          data_invio: conv.data_invio ? String(conv.data_invio) : undefined,
+          tipologia: conv.tipologia ? String(conv.tipologia) : undefined,
+          numero_raccomandata: conv.numero_raccomandata ? String(conv.numero_raccomandata) : undefined,
+          link_tracciamento_poste: conv.link_tracciamento_poste
+            ? String(conv.link_tracciamento_poste)
+            : undefined,
+          stato_raccomandata: conv.stato_raccomandata ? String(conv.stato_raccomandata) : undefined,
+          motivo_raccomandata: conv.motivo_raccomandata ? String(conv.motivo_raccomandata) : undefined,
+          nota: conv.nota ? String(conv.nota) : undefined,
+        };
+      }),
     };
   });
 
@@ -726,6 +747,9 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
   const motivazioneDepositoOpzioni = (motivazioneDepositoResp as Record<string, unknown>[]).map((r) => (r.nome as string) ?? "");
   const modalitaConvocazioneOpzioni = (modalitaConvocazioneResp as Record<string, unknown>[]).map((r) => (r.nome as string) ?? "");
   const materiaOpzioni = (materiaResp as Record<string, unknown>[]).map((r) => (r.nome as string) ?? "");
+  const motivoRaccomandataOpzioni = (motivoRaccomandataResp as Record<string, unknown>[]).map(
+    (r) => (r.nome as string) ?? ""
+  );
   const utenti = (utentiResp as Record<string, unknown>[]).map((u) => {
     const nome = ((u.name as string) ?? "").trim();
     const email = ((u.email as string) ?? "").trim();
@@ -776,6 +800,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     motivazioneDepositoOpzioni,
     modalitaConvocazioneOpzioni,
     materiaOpzioni,
+    motivoRaccomandataOpzioni,
     showFatture,
     soggetti,
     avvocati,
@@ -851,6 +876,10 @@ type Parte = {
     id: string;
     data_invio?: string;
     tipologia?: string;
+    numero_raccomandata?: string;
+    link_tracciamento_poste?: string;
+    stato_raccomandata?: string;
+    motivo_raccomandata?: string;
     nota?: string;
   }>;
 };
@@ -864,6 +893,32 @@ function SoggettoDetailRow({ label, value }: { label: string; value?: string }) 
     </span>
   );
 }
+
+/** Compact label + value for the mediazione overview panel. */
+function InfoField({
+  label,
+  children,
+  className = "",
+  wide = false,
+}: {
+  label: string;
+  children: ReactNode;
+  className?: string;
+  wide?: boolean;
+}) {
+  return (
+    <div className={`min-w-0 ${wide ? "col-span-full" : ""} ${className}`}>
+      <dt className="text-[10px] font-medium uppercase tracking-wide text-slate-400 leading-none">
+        {label}
+      </dt>
+      <dd className="mt-0.5 text-[13px] leading-snug text-slate-900 break-words">{children}</dd>
+    </div>
+  );
+}
+
+const EDIT_FIELD_INPUT =
+  "w-full rounded border border-slate-300 px-2 py-1 text-[13px] text-slate-900 bg-white";
+const EDIT_FIELD_LABEL = "text-[10px] font-medium uppercase tracking-wide text-slate-400 leading-none mb-0.5";
 
 // ─── Edit Avvocato Dialog ─────────────────────────────────────────────────────
 
@@ -1125,15 +1180,15 @@ function ParteCard({
     .join(" ");
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white overflow-hidden flex">
+    <div className="rounded-lg border border-slate-200 bg-white overflow-hidden flex">
 
       {/* ── LEFT: soggetto info ── */}
-      <div className="flex-1 min-w-0 flex flex-col p-4 gap-3">
-        <div className="flex items-start justify-between gap-3">
+      <div className="flex-1 min-w-0 flex flex-col p-2.5 gap-1.5">
+        <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 flex-1">
             {/* Name + type badge */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <p className="font-semibold text-slate-900 text-base leading-snug">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <p className="font-semibold text-slate-900 text-sm leading-snug">
                 {parte.soggetto_name}
               </p>
               <span
@@ -1146,7 +1201,7 @@ function ParteCard({
             </div>
 
             {/* Fiscal / contact details */}
-            <div className="mt-2 space-y-1">
+            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
               {isGiuridica ? (
                 <>
                   <SoggettoDetailRow label="P.IVA" value={parte.soggetto_piva} />
@@ -1180,20 +1235,20 @@ function ParteCard({
               onClick={(e) => {
                 if (!confirm("Eliminare questa parte dalla mediazione?")) e.preventDefault();
               }}
-              className="rounded-md p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+              className="rounded-md p-0.5 text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors"
               title="Elimina parte"
             >
-              <X className="h-4 w-4" />
+              <X className="h-3.5 w-3.5" />
             </button>
           </Form>
         </div>
 
         {/* Footer actions — pinned to bottom */}
-        <div className="mt-auto pt-2 border-t border-slate-100 flex items-center gap-3">
+        <div className="mt-auto pt-1.5 border-t border-slate-100 flex items-center gap-3">
           <button
             type="button"
             onClick={() => onEditSoggetto(parte)}
-            className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800 transition-colors"
+            className="inline-flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-800 transition-colors"
           >
             <Pencil className="h-3 w-3" />
             Modifica soggetto
@@ -1202,10 +1257,10 @@ function ParteCard({
       </div>
 
       {/* ── RIGHT: avvocati ── */}
-      <div className="w-[45%] shrink-0 flex flex-col border-l border-slate-100 bg-slate-50/50">
+      <div className="w-[42%] shrink-0 flex flex-col border-l border-slate-100 bg-slate-50/50">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-slate-100">
-          <span className="flex items-center gap-1.5 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+        <div className="flex items-center justify-between px-2.5 pt-2 pb-1.5 border-b border-slate-100">
+          <span className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
             Avvocati
             {parte.avvocati_details.length > 0 && (
               <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-600 normal-case tracking-normal">
@@ -1224,19 +1279,19 @@ function ParteCard({
         </div>
 
         {/* Avvocati list */}
-        <div className="flex-1 px-4 py-3">
+        <div className="flex-1 px-2.5 py-2">
           {parte.avvocati_details.length === 0 ? (
             <p className="text-xs text-slate-400 italic">Nessun avvocato associato</p>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               {parte.avvocati_details.map((a) => (
                 <div
                   key={a.id}
-                  className="rounded-lg border border-slate-200 bg-white px-3 py-2"
+                  className="rounded-md border border-slate-200 bg-white px-2 py-1.5"
                 >
                   {/* Avvocato name + action buttons */}
                   <div className="flex items-start justify-between gap-1">
-                    <p className="text-sm font-semibold text-slate-800 leading-snug">{a.display}</p>
+                    <p className="text-xs font-semibold text-slate-800 leading-snug">{a.display}</p>
                     <div className="flex items-center gap-0.5 shrink-0 ml-1">
                       {/* Edit avvocato */}
                       <button
@@ -1749,13 +1804,20 @@ function AddConvocazioneDialog({
   isOpen,
   onClose,
   partecipazioni,
+  motivoRaccomandataOpzioni,
 }: {
   isOpen: boolean;
   onClose: () => void;
   partecipazioni: Parte[];
+  motivoRaccomandataOpzioni: string[];
 }) {
+  const [tipologia, setTipologia] = useState("PEC");
+  const [statoRaccomandata, setStatoRaccomandata] = useState("");
+
   useEffect(() => {
     if (!isOpen) return;
+    setTipologia("PEC");
+    setStatoRaccomandata("");
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
@@ -1763,12 +1825,15 @@ function AddConvocazioneDialog({
 
   if (!isOpen) return null;
 
+  const isRaccomandata = tipologia === "Raccomandata";
+  const showMotivo = isRaccomandata && statoRaccomandata === "Non consegnabile";
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="w-full max-w-lg bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col">
+      <div className="w-full max-w-lg bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5">
           <h2 className="text-base font-semibold text-slate-800">Nuova convocazione</h2>
           <button type="button" onClick={onClose} className="rounded-md p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
@@ -1780,7 +1845,7 @@ function AddConvocazioneDialog({
             Aggiungi prima almeno una parte (Istante o Chiamato) nella tab Parti.
           </div>
         ) : (
-          <Form method="post" onSubmit={onClose} className="px-5 py-4 space-y-4">
+          <Form method="post" onSubmit={onClose} className="px-5 py-4 space-y-4 overflow-y-auto">
             <input type="hidden" name="_action" value="add_convocazione" />
             <div>
               <label className={EDIT_LABEL}>Parte (soggetto) <span className="text-red-500">*</span></label>
@@ -1804,12 +1869,64 @@ function AddConvocazioneDialog({
               </div>
               <div>
                 <label className={EDIT_LABEL}>Tipologia</label>
-                <select name="tipologia" defaultValue="PEC" className={EDIT_INPUT}>
+                <select
+                  name="tipologia"
+                  value={tipologia}
+                  onChange={(e) => {
+                    setTipologia(e.target.value);
+                    if (e.target.value !== "Raccomandata") setStatoRaccomandata("");
+                  }}
+                  className={EDIT_INPUT}
+                >
                   <option value="PEC">PEC</option>
                   <option value="Raccomandata">Raccomandata</option>
                 </select>
               </div>
             </div>
+            {isRaccomandata && (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className={EDIT_LABEL}>Numero raccomandata</label>
+                    <input type="text" name="numero_raccomandata" className={EDIT_INPUT} placeholder="es. 12345678901" />
+                  </div>
+                  <div>
+                    <label className={EDIT_LABEL}>Stato raccomandata</label>
+                    <select
+                      name="stato_raccomandata"
+                      value={statoRaccomandata}
+                      onChange={(e) => setStatoRaccomandata(e.target.value)}
+                      className={EDIT_INPUT}
+                    >
+                      <option value="">— Seleziona —</option>
+                      {STATO_RACCOMANDATA_VALUES.map((s) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className={EDIT_LABEL}>Link tracciamento</label>
+                  <input type="url" name="link_tracciamento_poste" className={EDIT_INPUT} placeholder="https://..." />
+                </div>
+                {showMotivo && (
+                  <div>
+                    <label className={EDIT_LABEL}>Motivo non consegnabile</label>
+                    <select name="motivo_raccomandata" className={EDIT_INPUT} defaultValue="">
+                      <option value="">— Seleziona motivo —</option>
+                      {motivoRaccomandataOpzioni.map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </select>
+                    {motivoRaccomandataOpzioni.length === 0 && (
+                      <p className="mt-1 text-xs text-amber-600">
+                        Nessun motivo in Impostazioni. Aggiungili in Admin → Impostazioni.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
             <div>
               <label className={EDIT_LABEL}>Nota</label>
               <textarea name="nota" rows={2} className={EDIT_INPUT} placeholder="Note sulla convocazione" />
@@ -1984,12 +2101,19 @@ function EditFatturaDialog({
 function EditConvocazioneDialog({
   convocazione,
   onClose,
+  motivoRaccomandataOpzioni,
 }: {
   convocazione: ConvocazioneEdit | null;
   onClose: () => void;
+  motivoRaccomandataOpzioni: string[];
 }) {
+  const [tipologia, setTipologia] = useState(convocazione?.tipologia ?? "PEC");
+  const [statoRaccomandata, setStatoRaccomandata] = useState(convocazione?.stato_raccomandata ?? "");
+
   useEffect(() => {
     if (!convocazione) return;
+    setTipologia(convocazione.tipologia ?? "PEC");
+    setStatoRaccomandata(convocazione.stato_raccomandata ?? "");
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
@@ -2000,12 +2124,15 @@ function EditConvocazioneDialog({
   const toDate = (d: string | undefined) =>
     d ? new Date(d).toISOString().slice(0, 10) : "";
 
+  const isRaccomandata = tipologia === "Raccomandata";
+  const showMotivo = isRaccomandata && statoRaccomandata === "Non consegnabile";
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="w-full max-w-lg bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col">
+      <div className="w-full max-w-lg bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5">
           <div>
             <h2 className="text-base font-semibold text-slate-800">Modifica convocazione</h2>
@@ -2018,7 +2145,7 @@ function EditConvocazioneDialog({
             <X className="h-4 w-4" />
           </button>
         </div>
-        <Form method="post" onSubmit={onClose} className="px-5 py-4 space-y-4">
+        <Form method="post" onSubmit={onClose} className="px-5 py-4 space-y-4 overflow-y-auto">
           <input type="hidden" name="_action" value="update_convocazione" />
           <input type="hidden" name="convocazione_id" value={convocazione.id} />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -2028,12 +2155,81 @@ function EditConvocazioneDialog({
             </div>
             <div>
               <label className={EDIT_LABEL}>Tipologia</label>
-              <select name="tipologia" defaultValue={convocazione.tipologia ?? "PEC"} className={EDIT_INPUT}>
+              <select
+                name="tipologia"
+                value={tipologia}
+                onChange={(e) => {
+                  setTipologia(e.target.value);
+                  if (e.target.value !== "Raccomandata") setStatoRaccomandata("");
+                }}
+                className={EDIT_INPUT}
+              >
                 <option value="PEC">PEC</option>
                 <option value="Raccomandata">Raccomandata</option>
               </select>
             </div>
           </div>
+          {isRaccomandata && (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className={EDIT_LABEL}>Numero raccomandata</label>
+                  <input
+                    type="text"
+                    name="numero_raccomandata"
+                    defaultValue={convocazione.numero_raccomandata ?? ""}
+                    className={EDIT_INPUT}
+                    placeholder="es. 12345678901"
+                  />
+                </div>
+                <div>
+                  <label className={EDIT_LABEL}>Stato raccomandata</label>
+                  <select
+                    name="stato_raccomandata"
+                    value={statoRaccomandata}
+                    onChange={(e) => setStatoRaccomandata(e.target.value)}
+                    className={EDIT_INPUT}
+                  >
+                    <option value="">— Seleziona —</option>
+                    {STATO_RACCOMANDATA_VALUES.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className={EDIT_LABEL}>Link tracciamento</label>
+                <input
+                  type="url"
+                  name="link_tracciamento_poste"
+                  defaultValue={convocazione.link_tracciamento_poste ?? ""}
+                  className={EDIT_INPUT}
+                  placeholder="https://..."
+                />
+              </div>
+              {showMotivo && (
+                <div>
+                  <label className={EDIT_LABEL}>Motivo non consegnabile</label>
+                  <select
+                    name="motivo_raccomandata"
+                    className={EDIT_INPUT}
+                    defaultValue={convocazione.motivo_raccomandata ?? ""}
+                  >
+                    <option value="">— Seleziona motivo —</option>
+                    {motivoRaccomandataOpzioni.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                    {convocazione.motivo_raccomandata &&
+                      !motivoRaccomandataOpzioni.includes(convocazione.motivo_raccomandata) && (
+                        <option value={convocazione.motivo_raccomandata}>
+                          {convocazione.motivo_raccomandata}
+                        </option>
+                      )}
+                  </select>
+                </div>
+              )}
+            </>
+          )}
           <div>
             <label className={EDIT_LABEL}>Nota</label>
             <textarea name="nota" rows={2} defaultValue={convocazione.nota ?? ""} className={EDIT_INPUT} placeholder="Note sulla convocazione" />
@@ -2138,6 +2334,10 @@ type ConvocazioneEdit = {
   id: string;
   data_invio?: string;
   tipologia?: string;
+  numero_raccomandata?: string;
+  link_tracciamento_poste?: string;
+  stato_raccomandata?: string;
+  motivo_raccomandata?: string;
   nota?: string;
   soggetto_name: string;
   istante_o_chiamato: string;
@@ -2172,6 +2372,7 @@ export default function MediazioneDetail() {
     motivazioneDepositoOpzioni,
     modalitaConvocazioneOpzioni,
     materiaOpzioni,
+    motivoRaccomandataOpzioni,
     showFatture,
     soggetti,
     avvocati,
@@ -2194,6 +2395,16 @@ export default function MediazioneDetail() {
   useEffect(() => {
     if (editMode) setOggettoEdit(mediazione.oggetto ?? "");
   }, [editMode, mediazione.oggetto]);
+
+  const missingConvocazioniFiles = (() => {
+    const hasRaccomandata = partecipazioni.some((p) =>
+      p.convocazioni.some((c) => c.tipologia === "Raccomandata")
+    );
+    if (!hasRaccomandata) return false;
+    return !documenti.some(
+      (d) => d.tipo === "Contenuto raccomandata" && d.has_file
+    );
+  })();
 
   const competenzaNonAttiva = (() => {
     const value = (mediazione.competenza ?? "").trim();
@@ -2279,7 +2490,7 @@ export default function MediazioneDetail() {
     d ? new Date(d).toISOString().slice(0, 10) : "";
 
   return (
-    <div className="space-y-4 lg:space-y-6">
+    <div className="space-y-3">
       {saveToast && (
         <div
           className={`fixed top-4 right-4 z-[200] w-[24rem] max-w-[calc(100vw-2rem)] transition-all duration-700 ease-in-out ${
@@ -2346,14 +2557,34 @@ export default function MediazioneDetail() {
         </div>
       </div>
 
-      <div className="grid gap-4 lg:gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1.8fr)] items-start">
-        <div className="space-y-3 lg:sticky lg:top-20 lg:self-start">
-        <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <h1 className="text-base sm:text-lg font-semibold text-slate-800">
+      {missingConvocazioniFiles && (
+        <div
+          className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-amber-900"
+          role="status"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" aria-hidden="true" />
+          <p className="text-xs sm:text-sm leading-relaxed">
+            Ci sono convocazioni (raccomandata) ma manca il file{" "}
+            <strong>Contenuto raccomandata</strong> nei documenti. Caricalo da{" "}
+            <Link
+              to="/mediazioni/convocazioni/upload"
+              className="font-medium underline underline-offset-2 hover:text-amber-950"
+            >
+              Carica convocazioni
+            </Link>{" "}
+            oppure nella tab Documenti.
+          </p>
+        </div>
+      )}
+
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1.85fr)] items-start">
+        <div className="space-y-2 lg:sticky lg:top-16 lg:self-start lg:max-h-[calc(100vh-5rem)] lg:overflow-y-auto">
+        <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h1 className="text-sm sm:text-base font-semibold text-slate-800 truncate">
               Mediazione {mediazione.rgm || mediazione.id}
             </h1>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 shrink-0">
               <Form method="post">
                 <input type="hidden" name="_action" value="set_adesione" />
                 <input
@@ -2363,7 +2594,7 @@ export default function MediazioneDetail() {
                 />
                 <button
                   type="submit"
-                  className={`inline-flex items-center rounded-lg px-2.5 py-1.5 text-xs font-medium ${
+                  className={`inline-flex items-center rounded-md px-2 py-1 text-[11px] font-medium ${
                     mediazione.adesione
                       ? "bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
                       : "bg-slate-100 text-slate-700 hover:bg-slate-200"
@@ -2381,290 +2612,39 @@ export default function MediazioneDetail() {
                 <button
                   type="button"
                   onClick={() => setEditMode(true)}
-                  className="inline-flex items-center justify-center rounded-lg bg-[#3aaeba] p-1.5 text-white hover:bg-[#349aa5]"
+                  className="inline-flex items-center justify-center rounded-md bg-[#3aaeba] p-1.5 text-white hover:bg-[#349aa5]"
                   title="Modifica dati"
                   aria-label="Modifica dati"
                 >
-                  <Pencil className="h-4 w-4" aria-hidden="true" />
+                  <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>
               )}
             </div>
           </div>
 
           {!editMode ? (
-            <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
-              <div>
-                <dt className="font-medium text-slate-500 mb-0.5">RGM</dt>
-                <dd className="text-slate-900">{mediazione.rgm || "—"}</dd>
-              </div>
-              <div>
-                <dt className="font-medium text-slate-500 mb-0.5">Codice univoco cliente</dt>
-                <dd className="text-slate-900 font-mono text-xs sm:text-sm break-all">
-                  {mediazione.codice_univoco_cliente || "—"}
-                </dd>
-              </div>
-              <div>
-                <dt className="font-medium text-slate-500 mb-0.5">Data protocollo</dt>
-                <dd className="text-slate-900">{formatDate(mediazione.data_protocollo)}</dd>
-              </div>
-              <div>
-                <dt className="font-medium text-slate-500 mb-0.5">Mediatore</dt>
-                <dd className="text-slate-900">{mediazione.mediatore_name}</dd>
-              </div>
-              <div>
-                <dt className="font-medium text-slate-500 mb-0.5">Adesione</dt>
-                <dd className="text-slate-900">{mediazione.adesione ? "Sì" : "No"}</dd>
-              </div>
-              <div>
-                <dt className="font-medium text-slate-500 mb-0.5">Trasmessa</dt>
-                <dd className="text-slate-900">{mediazione.trasmessa ? "Sì" : "No"}</dd>
-              </div>
-              <div>
-                <dt className="font-medium text-slate-500 mb-0.5">Proposta mediatore</dt>
-                <dd className="text-slate-900">{mediazione.proposta_mediatore ? "Sì" : "No"}</dd>
-              </div>
-              <div>
-                <dt className="font-medium text-slate-500 mb-0.5">N. esonerati gratuito patrocinio</dt>
-                <dd className="text-slate-900">{mediazione.numero_esonerati_gratuito_patrocinio}</dd>
-              </div>
-              <div className="sm:col-span-2">
-                <dt className="font-medium text-slate-500 mb-0.5">Oggetto / Materia</dt>
-                <dd className="text-slate-900 line-clamp-3">{mediazione.oggetto || "—"}</dd>
-              </div>
-              {mediazione.oggetto?.toLowerCase() === "altro" && (
-                <div className="sm:col-span-2">
-                  <dt className="font-medium text-slate-500 mb-0.5">Materia (altro)</dt>
-                  <dd className="text-slate-900 line-clamp-3">{mediazione.materia_altro || "—"}</dd>
-                </div>
-              )}
-              <div>
-                <dt className="font-medium text-slate-500 mb-0.5">Valore</dt>
-                <dd className="text-slate-900">{mediazione.valore || "—"}</dd>
-              </div>
-              <div>
-                <dt className="font-medium text-slate-500 mb-0.5">Competenza</dt>
-                <dd className="text-slate-900 inline-flex items-center gap-1.5">
-                  <span>{mediazione.competenza || "—"}</span>
-                  {competenzaNonAttiva && (
-                    <span
-                      className="tooltip tooltip-top inline-flex cursor-help"
-                      data-tip="Non abbiamo questa competenza"
-                      title="Non abbiamo questa competenza"
-                      aria-label="Non abbiamo questa competenza"
-                    >
-                      <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" aria-hidden="true" />
-                    </span>
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt className="font-medium text-slate-500 mb-0.5">Modalità mediazione</dt>
-                <dd className="text-slate-900">{mediazione.modalita_mediazione || "—"}</dd>
-              </div>
-              <div>
-                <dt className="font-medium text-slate-500 mb-0.5">Motivazione deposito</dt>
-                <dd className="text-slate-900">{mediazione.motivazione_deposito || "—"}</dd>
-              </div>
-              {(mediazione.motivazione_deposito === "Disposta dal giudice" || mediazione.data_avvio_entro) && (
-                <div>
-                  <dt className="font-medium text-slate-500 mb-0.5">Data avvio entro</dt>
-                  <dd className="text-slate-900">{formatDate(mediazione.data_avvio_entro)}</dd>
-                </div>
-              )}
-              <div>
-                <dt className="font-medium text-slate-500 mb-0.5">Modalità convocazione</dt>
-                <dd className="text-slate-900">{mediazione.modalita_convocazione || "—"}</dd>
-              </div>
-              <div>
-                <dt className="font-medium text-slate-500 mb-0.5">Esito</dt>
-                <dd className="text-slate-900">{mediazione.esito_finale || "—"}</dd>
-              </div>
-              <div>
-                <dt className="font-medium text-slate-500 mb-0.5">Data chiusura</dt>
-                <dd className="text-slate-900">{formatDate(mediazione.data_chiusura)}</dd>
-              </div>
-              <div className="sm:col-span-2">
-                <dt className="font-medium text-slate-500 mb-0.5">Nota</dt>
-                <dd className="text-slate-900 whitespace-pre-wrap max-h-40 overflow-auto text-xs sm:text-sm">
-                  {mediazione.nota || "—"}
-                </dd>
-              </div>
-              <div>
-                <dt className="font-medium text-slate-500 mb-0.5">Creata il</dt>
-                <dd className="text-slate-900">{formatDateTime(mediazione.created)}</dd>
-              </div>
-              <div>
-                <dt className="font-medium text-slate-500 mb-0.5">Aggiornata il</dt>
-                <dd className="text-slate-900">{formatDateTime(mediazione.updated)}</dd>
-              </div>
-            </dl>
-          ) : (
-            <Form method="post" className="space-y-3">
-              <input type="hidden" name="_action" value="update" />
-              <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
-                <div>
-                  <dt className="font-medium text-slate-500 mb-0.5">RGM</dt>
-                  <dd>
-                    <input
-                      name="rgm"
-                      defaultValue={mediazione.rgm}
-                      className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
-                    />
-                  </dd>
-                </div>
-                <div>
-                  <dt className="font-medium text-slate-500 mb-0.5">Data protocollo</dt>
-                  <dd>
-                    <input
-                      name="data_protocollo"
-                      type="date"
-                      defaultValue={toInputDate(mediazione.data_protocollo)}
-                      className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
-                    />
-                  </dd>
-                </div>
-                <div>
-                  <dt className="font-medium text-slate-500 mb-0.5">Mediatore</dt>
-                  <dd>
-                    {canEditMediatore ? (
-                      <div>
-                        <select
-                          name="mediatore"
-                          defaultValue={mediazione.mediatore_id || ""}
-                          className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900 bg-white"
-                        >
-                          <option value="">Seleziona mediatore</option>
-                          {utenti.map((u) => (
-                            <option key={u.id} value={u.id}>
-                              {u.display}{u.email ? ` (${u.email})` : ""}
-                            </option>
-                          ))}
-                        </select>
-                        <p className="mt-1 text-[11px] text-slate-500">
-                          Il mediatore viene aggiornato solo dopo «Salva modifiche».
-                        </p>
-                      </div>
-                    ) : (
-                      <span className="mt-0.5 text-slate-900 text-sm">{mediazione.mediatore_name}</span>
-                    )}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="font-medium text-slate-500 mb-0.5">Esito</dt>
-                  <dd>
-                    <select
-                      name="esito_finale"
-                      defaultValue={mediazione.esito_finale || ""}
-                      className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900 bg-white"
-                    >
-                      {ESITO_FINALE_FORM_OPTIONS.map((o) => (
-                        <option key={o || "empty"} value={o}>{o || "—"}</option>
-                      ))}
-                    </select>
-                  </dd>
-                </div>
-                <div>
-                  <dt className="font-medium text-slate-500 mb-0.5">Data chiusura</dt>
-                  <dd>
-                    <input
-                      name="data_chiusura"
-                      type="date"
-                      defaultValue={toInputDate(mediazione.data_chiusura)}
-                      className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
-                    />
-                    <p className="mt-1 text-[11px] text-slate-500">
-                      Entrambi i campi Esito e Data chiusura sono necessari per chiudere la mediazione.
-                    </p>
-                  </dd>
-                </div>
-                <div>
-                  <dt className="font-medium text-slate-500 mb-0.5">Trasmessa</dt>
-                  <dd className="pt-1.5">
-                    <label className="inline-flex items-center gap-2 text-slate-900">
-                      <input
-                        type="checkbox"
-                        name="trasmessa"
-                        value="true"
-                        defaultChecked={mediazione.trasmessa}
-                        className="rounded border-slate-300"
-                      />
-                      Sì
-                    </label>
-                  </dd>
-                </div>
-                <div>
-                  <dt className="font-medium text-slate-500 mb-0.5">Proposta mediatore</dt>
-                  <dd className="pt-1.5">
-                    <label className="inline-flex items-center gap-2 text-slate-900">
-                      <input
-                        type="checkbox"
-                        name="proposta_mediatore"
-                        value="true"
-                        defaultChecked={mediazione.proposta_mediatore}
-                        className="rounded border-slate-300"
-                      />
-                      Sì
-                    </label>
-                  </dd>
-                </div>
-                <div>
-                  <dt className="font-medium text-slate-500 mb-0.5">N. esonerati gratuito patrocinio</dt>
-                  <dd>
-                    <input
-                      name="numero_esonerati_gratuito_patrocinio"
-                      type="number"
-                      min={0}
-                      step={1}
-                      defaultValue={mediazione.numero_esonerati_gratuito_patrocinio}
-                      className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
-                    />
-                  </dd>
-                </div>
-                <div className="sm:col-span-2">
-                  <dt className="font-medium text-slate-500 mb-0.5">Oggetto / Materia</dt>
-                  <dd>
-                    <input
-                      name="oggetto"
-                      list="materia-list"
-                      value={oggettoEdit}
-                      onChange={(e) => setOggettoEdit(e.target.value)}
-                      className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
-                    />
-                    <datalist id="materia-list">
-                      {materiaOpzioni.map((o) => <option key={o} value={o} />)}
-                    </datalist>
-                  </dd>
-                </div>
-                {oggettoEdit.trim().toLowerCase() === "altro" && (
-                  <div className="sm:col-span-2">
-                    <dt className="font-medium text-slate-500 mb-0.5">Materia (altro)</dt>
-                    <dd>
-                      <input
-                        name="materia_altro"
-                        defaultValue={mediazione.materia_altro}
-                        placeholder="Specifica la materia"
-                        className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
-                      />
-                    </dd>
-                  </div>
+            <div className="space-y-2">
+              <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 sm:grid-cols-3">
+                <InfoField label="RGM">{mediazione.rgm || "—"}</InfoField>
+                <InfoField label="Protocollo">{formatDate(mediazione.data_protocollo)}</InfoField>
+                <InfoField label="Mediatore">{mediazione.mediatore_name}</InfoField>
+                <InfoField label="Codice cliente" className="col-span-2 sm:col-span-3">
+                  <span className="font-mono text-xs break-all">
+                    {mediazione.codice_univoco_cliente || "—"}
+                  </span>
+                </InfoField>
+                <InfoField label="Oggetto / Materia" wide>
+                  <span className="line-clamp-2">{mediazione.oggetto || "—"}</span>
+                </InfoField>
+                {mediazione.oggetto?.toLowerCase() === "altro" && (
+                  <InfoField label="Materia (altro)" wide>
+                    <span className="line-clamp-2">{mediazione.materia_altro || "—"}</span>
+                  </InfoField>
                 )}
-                <div>
-                  <dt className="font-medium text-slate-500 mb-0.5">Valore</dt>
-                  <dd>
-                    <input
-                      name="valore"
-                      list="scaglioni-list"
-                      defaultValue={mediazione.valore}
-                      className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
-                    />
-                    <datalist id="scaglioni-list">
-                      {scaglioniOpzioni.map((o) => <option key={o} value={o} />)}
-                    </datalist>
-                  </dd>
-                </div>
-                <div>
-                  <dt className="font-medium text-slate-500 mb-0.5 inline-flex items-center gap-1.5">
-                    Competenza
+                <InfoField label="Valore">{mediazione.valore || "—"}</InfoField>
+                <InfoField label="Competenza">
+                  <span className="inline-flex items-center gap-1">
+                    <span>{mediazione.competenza || "—"}</span>
                     {competenzaNonAttiva && (
                       <span
                         className="tooltip tooltip-top inline-flex cursor-help"
@@ -2675,32 +2655,243 @@ export default function MediazioneDetail() {
                         <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" aria-hidden="true" />
                       </span>
                     )}
+                  </span>
+                </InfoField>
+                <InfoField label="Modalità">{mediazione.modalita_mediazione || "—"}</InfoField>
+                <InfoField label="Motivazione">{mediazione.motivazione_deposito || "—"}</InfoField>
+                {(mediazione.motivazione_deposito === "Disposta dal giudice" || mediazione.data_avvio_entro) && (
+                  <InfoField label="Avvio entro">{formatDate(mediazione.data_avvio_entro)}</InfoField>
+                )}
+                <InfoField label="Convocazione">{mediazione.modalita_convocazione || "—"}</InfoField>
+                <InfoField label="Esito">{mediazione.esito_finale || "—"}</InfoField>
+                <InfoField label="Chiusura">{formatDate(mediazione.data_chiusura)}</InfoField>
+                <InfoField label="Esonerati GP">
+                  {mediazione.numero_esonerati_gratuito_patrocinio}
+                </InfoField>
+              </dl>
+
+              <div className="flex flex-wrap gap-1">
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                    mediazione.trasmessa
+                      ? "bg-emerald-50 text-emerald-700"
+                      : "bg-slate-100 text-slate-500"
+                  }`}
+                >
+                  Trasmessa: {mediazione.trasmessa ? "sì" : "no"}
+                </span>
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                    mediazione.proposta_mediatore
+                      ? "bg-sky-50 text-sky-700"
+                      : "bg-slate-100 text-slate-500"
+                  }`}
+                >
+                  Proposta: {mediazione.proposta_mediatore ? "sì" : "no"}
+                </span>
+              </div>
+
+              {mediazione.nota ? (
+                <div>
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400 leading-none">
+                    Nota
+                  </p>
+                  <div className="mt-0.5 whitespace-pre-wrap max-h-16 overflow-auto text-xs text-slate-800 leading-snug">
+                    {mediazione.nota}
+                  </div>
+                </div>
+              ) : null}
+
+              <p className="text-[10px] text-slate-400 leading-none pt-0.5 border-t border-slate-100">
+                Creata {formatDateTime(mediazione.created)}
+                {" · "}
+                Aggiornata {formatDateTime(mediazione.updated)}
+              </p>
+            </div>
+          ) : (
+            <Form method="post" className="space-y-2">
+              <input type="hidden" name="_action" value="update" />
+              <dl className="grid grid-cols-2 gap-x-2.5 gap-y-1.5 text-sm sm:grid-cols-3">
+                <div>
+                  <dt className={EDIT_FIELD_LABEL}>RGM</dt>
+                  <dd>
+                    <input
+                      name="rgm"
+                      defaultValue={mediazione.rgm}
+                      className={EDIT_FIELD_INPUT}
+                    />
+                  </dd>
+                </div>
+                <div>
+                  <dt className={EDIT_FIELD_LABEL}>Data protocollo</dt>
+                  <dd>
+                    <input
+                      name="data_protocollo"
+                      type="date"
+                      defaultValue={toInputDate(mediazione.data_protocollo)}
+                      className={EDIT_FIELD_INPUT}
+                    />
+                  </dd>
+                </div>
+                <div>
+                  <dt className={EDIT_FIELD_LABEL}>Mediatore</dt>
+                  <dd>
+                    {canEditMediatore ? (
+                      <select
+                        name="mediatore"
+                        defaultValue={mediazione.mediatore_id || ""}
+                        className={EDIT_FIELD_INPUT}
+                        title="Il mediatore viene aggiornato solo dopo «Salva modifiche»"
+                      >
+                        <option value="">Seleziona mediatore</option>
+                        {utenti.map((u) => (
+                          <option key={u.id} value={u.id}>
+                            {u.display}{u.email ? ` (${u.email})` : ""}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="text-[13px] text-slate-900">{mediazione.mediatore_name}</span>
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt className={EDIT_FIELD_LABEL}>Esito</dt>
+                  <dd>
+                    <select
+                      name="esito_finale"
+                      defaultValue={mediazione.esito_finale || ""}
+                      className={EDIT_FIELD_INPUT}
+                    >
+                      {ESITO_FINALE_FORM_OPTIONS.map((o) => (
+                        <option key={o || "empty"} value={o}>{o || "—"}</option>
+                      ))}
+                    </select>
+                  </dd>
+                </div>
+                <div>
+                  <dt className={EDIT_FIELD_LABEL}>Data chiusura</dt>
+                  <dd>
+                    <input
+                      name="data_chiusura"
+                      type="date"
+                      defaultValue={toInputDate(mediazione.data_chiusura)}
+                      className={EDIT_FIELD_INPUT}
+                      title="Entrambi Esito e Data chiusura sono necessari per chiudere"
+                    />
+                  </dd>
+                </div>
+                <div>
+                  <dt className={EDIT_FIELD_LABEL}>Esonerati GP</dt>
+                  <dd>
+                    <input
+                      name="numero_esonerati_gratuito_patrocinio"
+                      type="number"
+                      min={0}
+                      step={1}
+                      defaultValue={mediazione.numero_esonerati_gratuito_patrocinio}
+                      className={EDIT_FIELD_INPUT}
+                    />
+                  </dd>
+                </div>
+                <div className="col-span-2 sm:col-span-3 flex flex-wrap gap-3 items-center pt-0.5">
+                  <label className="inline-flex items-center gap-1.5 text-[13px] text-slate-900">
+                    <input
+                      type="checkbox"
+                      name="trasmessa"
+                      value="true"
+                      defaultChecked={mediazione.trasmessa}
+                      className="rounded border-slate-300"
+                    />
+                    Trasmessa
+                  </label>
+                  <label className="inline-flex items-center gap-1.5 text-[13px] text-slate-900">
+                    <input
+                      type="checkbox"
+                      name="proposta_mediatore"
+                      value="true"
+                      defaultChecked={mediazione.proposta_mediatore}
+                      className="rounded border-slate-300"
+                    />
+                    Proposta mediatore
+                  </label>
+                </div>
+                <div className="col-span-2 sm:col-span-3">
+                  <dt className={EDIT_FIELD_LABEL}>Oggetto / Materia</dt>
+                  <dd>
+                    <input
+                      name="oggetto"
+                      list="materia-list"
+                      value={oggettoEdit}
+                      onChange={(e) => setOggettoEdit(e.target.value)}
+                      className={EDIT_FIELD_INPUT}
+                    />
+                    <datalist id="materia-list">
+                      {materiaOpzioni.map((o) => <option key={o} value={o} />)}
+                    </datalist>
+                  </dd>
+                </div>
+                {oggettoEdit.trim().toLowerCase() === "altro" && (
+                  <div className="col-span-2 sm:col-span-3">
+                    <dt className={EDIT_FIELD_LABEL}>Materia (altro)</dt>
+                    <dd>
+                      <input
+                        name="materia_altro"
+                        defaultValue={mediazione.materia_altro}
+                        placeholder="Specifica la materia"
+                        className={EDIT_FIELD_INPUT}
+                      />
+                    </dd>
+                  </div>
+                )}
+                <div>
+                  <dt className={EDIT_FIELD_LABEL}>Valore</dt>
+                  <dd>
+                    <input
+                      name="valore"
+                      list="scaglioni-list"
+                      defaultValue={mediazione.valore}
+                      className={EDIT_FIELD_INPUT}
+                    />
+                    <datalist id="scaglioni-list">
+                      {scaglioniOpzioni.map((o) => <option key={o} value={o} />)}
+                    </datalist>
+                  </dd>
+                </div>
+                <div>
+                  <dt className={`${EDIT_FIELD_LABEL} inline-flex items-center gap-1`}>
+                    Competenza
+                    {competenzaNonAttiva && (
+                      <span
+                        className="tooltip tooltip-top inline-flex cursor-help"
+                        data-tip="Non abbiamo questa competenza"
+                        title="Non abbiamo questa competenza"
+                        aria-label="Non abbiamo questa competenza"
+                      >
+                        <AlertTriangle className="h-3 w-3 shrink-0 text-amber-500" aria-hidden="true" />
+                      </span>
+                    )}
                   </dt>
                   <dd>
                     <input
                       name="competenza"
                       list="competenza-list"
                       defaultValue={mediazione.competenza}
-                      className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
+                      className={EDIT_FIELD_INPUT}
                     />
                     <datalist id="competenza-list">
                       {competenzaOpzioni.map((o) => <option key={o} value={o} />)}
                     </datalist>
-                    {competenzaNonAttiva && (
-                      <p className="mt-1 text-[11px] text-amber-600">
-                        Non abbiamo questa competenza.
-                      </p>
-                    )}
                   </dd>
                 </div>
                 <div>
-                  <dt className="font-medium text-slate-500 mb-0.5">Modalità mediazione</dt>
+                  <dt className={EDIT_FIELD_LABEL}>Modalità mediazione</dt>
                   <dd>
                     <input
                       name="modalita_mediazione"
                       list="modalita-list"
                       defaultValue={mediazione.modalita_mediazione}
-                      className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
+                      className={EDIT_FIELD_INPUT}
                     />
                     <datalist id="modalita-list">
                       {modalitaOpzioni.map((o) => <option key={o} value={o} />)}
@@ -2708,14 +2899,14 @@ export default function MediazioneDetail() {
                   </dd>
                 </div>
                 <div>
-                  <dt className="font-medium text-slate-500 mb-0.5">Motivazione deposito</dt>
+                  <dt className={EDIT_FIELD_LABEL}>Motivazione deposito</dt>
                   <dd>
                     <input
                       name="motivazione_deposito"
                       list="motivazione-deposito-list"
                       defaultValue={mediazione.motivazione_deposito}
                       placeholder="es. Quale condizione di procedibilità"
-                      className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
+                      className={EDIT_FIELD_INPUT}
                     />
                     <datalist id="motivazione-deposito-list">
                       {motivazioneDepositoOpzioni.map((o) => <option key={o} value={o} />)}
@@ -2723,49 +2914,49 @@ export default function MediazioneDetail() {
                   </dd>
                 </div>
                 <div>
-                  <dt className="font-medium text-slate-500 mb-0.5">Data avvio entro</dt>
+                  <dt className={EDIT_FIELD_LABEL}>Data avvio entro</dt>
                   <dd>
                     <input
                       name="data_avvio_entro"
                       type="date"
                       defaultValue={toInputDate(mediazione.data_avvio_entro)}
-                      className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
+                      className={EDIT_FIELD_INPUT}
                       title="Obbligatorio se motivazione deposito è «Disposta dal giudice»"
                     />
                   </dd>
                 </div>
                 <div>
-                  <dt className="font-medium text-slate-500 mb-0.5">Modalità convocazione</dt>
+                  <dt className={EDIT_FIELD_LABEL}>Modalità convocazione</dt>
                   <dd>
                     <input
                       name="modalita_convocazione"
                       list="modalita-convocazione-list"
                       defaultValue={mediazione.modalita_convocazione}
                       placeholder="es. Pec alla parte"
-                      className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
+                      className={EDIT_FIELD_INPUT}
                     />
                     <datalist id="modalita-convocazione-list">
                       {modalitaConvocazioneOpzioni.map((o) => <option key={o} value={o} />)}
                     </datalist>
                   </dd>
                 </div>
-                <div className="sm:col-span-2">
-                  <dt className="font-medium text-slate-500 mb-0.5">Nota</dt>
+                <div className="col-span-2 sm:col-span-3">
+                  <dt className={EDIT_FIELD_LABEL}>Nota</dt>
                   <dd>
                     <textarea
                       name="nota"
-                      rows={3}
+                      rows={2}
                       defaultValue={mediazione.nota}
-                      className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm text-slate-900"
+                      className={EDIT_FIELD_INPUT}
                     />
                   </dd>
                 </div>
               </dl>
-              <div className="pt-1 flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-2">
                 <button
                   type="submit"
                   disabled={isSavingMediazione}
-                  className="rounded-lg bg-[#3aaeba] px-3 py-1.5 text-xs sm:text-sm font-medium text-white hover:bg-[#349aa5] disabled:opacity-60 disabled:pointer-events-none"
+                  className="rounded-md bg-[#3aaeba] px-2.5 py-1 text-xs font-medium text-white hover:bg-[#349aa5] disabled:opacity-60 disabled:pointer-events-none"
                 >
                   {isSavingMediazione ? "Salvataggio…" : "Salva modifiche"}
                 </button>
@@ -2773,7 +2964,7 @@ export default function MediazioneDetail() {
                   type="button"
                   disabled={isSavingMediazione}
                   onClick={() => setEditMode(false)}
-                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs sm:text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                 >
                   Annulla
                 </button>
@@ -2784,20 +2975,20 @@ export default function MediazioneDetail() {
         </section>
         <button
           type="button"
-          className="w-full rounded-lg bg-[#3aaeba] px-3 py-2 text-sm font-medium text-white hover:bg-[#349aa5]"
+          className="w-full rounded-lg bg-[#3aaeba] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#349aa5]"
         >
           Genera verbale
         </button>
         </div>
 
-        <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <nav className="flex flex-wrap gap-1 border-b border-slate-200 mb-4">
+        <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+          <nav className="flex flex-wrap gap-0.5 border-b border-slate-200 mb-3">
           {TABS.filter((t) => t.id !== "fatture" || showFatture).map((t) => (
             <button
               key={t.id}
               type="button"
               onClick={() => setSearchParams({ tab: t.id })}
-              className={`px-3 py-2 text-xs sm:text-sm font-medium rounded-t ${
+              className={`px-2.5 py-1.5 text-xs font-medium rounded-t ${
                 tab === t.id
                   ? "bg-white border border-slate-200 border-b-white -mb-px text-[#3aaeba]"
                   : "text-slate-600 hover:text-slate-900"
@@ -2810,10 +3001,10 @@ export default function MediazioneDetail() {
 
           {/* ── PARTI TAB ── */}
           {tab === "parti" && (
-            <div className="space-y-6">
+            <div className="space-y-4">
               {searchParams.get("parti_duplicate") === "1" && (
-                <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-amber-800">
-                  <p className="text-sm">
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
+                  <p className="text-xs sm:text-sm">
                     Questo soggetto è già presente come Istante o Chiamato in questa mediazione. Non sono ammessi duplicati per ruolo.
                   </p>
                   <button
@@ -2832,7 +3023,7 @@ export default function MediazioneDetail() {
               )}
               {/* Istanti section */}
               <section>
-                <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center justify-between mb-2">
                   <h2 className="text-sm font-semibold text-slate-800">
                     Istanti
                     {istanti.length > 0 && (
@@ -2844,18 +3035,18 @@ export default function MediazioneDetail() {
                   <button
                     type="button"
                     onClick={() => openAddParteDialog()}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-[#3aaeba] px-3 py-1.5 text-white hover:bg-[#349aa5] transition-colors"
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-[#3aaeba] px-2.5 py-1 text-white hover:bg-[#349aa5] transition-colors"
                   >
                     <Plus className="h-3.5 w-3.5" />
-                    <span className="text-sm font-medium">Aggiungi parte</span>
+                    <span className="text-xs font-medium">Aggiungi parte</span>
                   </button>
                 </div>
                 {istanti.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center">
-                    <p className="text-sm text-slate-400">Nessun istante</p>
+                  <div className="rounded-lg border border-dashed border-slate-200 p-3 text-center">
+                    <p className="text-xs text-slate-400">Nessun istante</p>
                   </div>
                 ) : (
-                  <div className="space-y-3">
+                  <div className="space-y-2">
                     {istanti.map((p) => (
                       <ParteCard
                         key={p.id}
@@ -2873,7 +3064,7 @@ export default function MediazioneDetail() {
 
               {/* Chiamati section */}
               <section>
-                <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center justify-between mb-2">
                   <h2 className="text-sm font-semibold text-slate-800">
                     Chiamati
                     {chiamati.length > 0 && (
@@ -2884,11 +3075,11 @@ export default function MediazioneDetail() {
                   </h2>
                 </div>
                 {chiamati.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center">
-                    <p className="text-sm text-slate-400">Nessun chiamato</p>
+                  <div className="rounded-lg border border-dashed border-slate-200 p-3 text-center">
+                    <p className="text-xs text-slate-400">Nessun chiamato</p>
                   </div>
                 ) : (
-                  <div className="space-y-3">
+                  <div className="space-y-2">
                     {chiamati.map((p) => (
                       <ParteCard
                         key={p.id}
@@ -3018,6 +3209,14 @@ export default function MediazioneDetail() {
                 <span className="text-sm font-medium">Aggiungi convocazione</span>
               </button>
             </div>
+            {missingConvocazioniFiles && (
+              <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" aria-hidden="true" />
+                <p className="text-xs leading-relaxed">
+                  Manca il file <strong>Contenuto raccomandata</strong> nei documenti per queste convocazioni.
+                </p>
+              </div>
+            )}
             {partecipazioni.flatMap((p) =>
               p.convocazioni.map((c) => (
                 <div
@@ -3032,7 +3231,31 @@ export default function MediazioneDetail() {
                         ? new Date(c.data_invio).toLocaleDateString("it-IT")
                         : "—"}{" "}
                       · {c.tipologia ?? "—"}
+                      {c.tipologia === "Raccomandata" && c.stato_raccomandata
+                        ? ` · ${c.stato_raccomandata}`
+                        : ""}
                     </p>
+                    {c.tipologia === "Raccomandata" && c.numero_raccomandata && (
+                      <p className="text-slate-500 mt-0.5">
+                        N. {c.numero_raccomandata}
+                        {c.link_tracciamento_poste ? (
+                          <>
+                            {" · "}
+                            <a
+                              href={c.link_tracciamento_poste}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-[#3aaeba] hover:underline"
+                            >
+                              Tracciamento
+                            </a>
+                          </>
+                        ) : null}
+                      </p>
+                    )}
+                    {c.stato_raccomandata === "Non consegnabile" && c.motivo_raccomandata && (
+                      <p className="text-red-600 mt-0.5">Motivo: {c.motivo_raccomandata}</p>
+                    )}
                     {c.nota && <p className="text-slate-500 mt-0.5">{c.nota}</p>}
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
@@ -3045,6 +3268,10 @@ export default function MediazioneDetail() {
                             id: c.id,
                             data_invio: c.data_invio,
                             tipologia: c.tipologia,
+                            numero_raccomandata: c.numero_raccomandata,
+                            link_tracciamento_poste: c.link_tracciamento_poste,
+                            stato_raccomandata: c.stato_raccomandata,
+                            motivo_raccomandata: c.motivo_raccomandata,
                             nota: c.nota,
                             soggetto_name: p.soggetto_name,
                             istante_o_chiamato: p.istante_o_chiamato,
@@ -3417,6 +3644,7 @@ export default function MediazioneDetail() {
         isOpen={dialogMode?.type === "addConvocazione"}
         onClose={closeDialog}
         partecipazioni={partecipazioni}
+        motivoRaccomandataOpzioni={motivoRaccomandataOpzioni}
       />
 
       {/* ── Add Documento dialog ── */}
@@ -3442,6 +3670,7 @@ export default function MediazioneDetail() {
       <EditConvocazioneDialog
         convocazione={dialogMode?.type === "editConvocazione" ? dialogMode.convocazione : null}
         onClose={closeDialog}
+        motivoRaccomandataOpzioni={motivoRaccomandataOpzioni}
       />
     </div>
   );

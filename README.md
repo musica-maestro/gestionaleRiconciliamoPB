@@ -35,7 +35,7 @@ cp .env.example .env   # opzionale: imposta POCKETBASE_URL e SESSION_SECRET
 - **manager**: vede tutte le mediazioni e le fatture; non gestisce utenti.
 - **admin**: accesso completo incluso gestione utenti in Admin.
 
-Utenti con `stato = false` non possono accedere (messaggio "Account disattivato.").
+Utenti con `stato = false` non possono accedere (messaggio "Impossibile accedere. Ritenta il login.").
 
 ## Route principali
 

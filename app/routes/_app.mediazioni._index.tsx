@@ -18,12 +18,61 @@ import {
   filterableTableHeaderLabelClass,
 } from "~/components/data-table";
 import { ExportMediazioniDialog } from "~/components/export-mediazioni-dialog";
+import { ExportFlussoNotificheDialog } from "~/components/export-flusso-notifiche-dialog";
 import { ESITO_FINALE_FILTER_OPTIONS } from "~/lib/esito-finale";
-import { AlertTriangle, Eye, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from "lucide-react";
+import { AlertTriangle, Eye, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Download } from "lucide-react";
 const PER_PAGE_OPTIONS = [10, 25, 50, 100] as const;
-const SORT_FIELDS = ["rgm", "oggetto", "data_deposito", "data_protocollo", "data_chiusura", "esito_finale", "modalita_mediazione", "competenza", "mediatore_name", "stato", "data_assegnazione"] as const;
-const TABS = ["da-assegnare", "da-pianificare", "da-notificare", "aperte", "chiuse"] as const;
+const SORT_FIELDS = ["rgm", "codice_univoco_cliente", "oggetto", "data_deposito", "data_protocollo", "data_chiusura", "esito_finale", "modalita_mediazione", "competenza", "mediatore_name", "stato", "data_assegnazione"] as const;
+const TABS = ["da-assegnare", "da-pianificare", "da-convocare", "aperte", "chiuse"] as const;
+/** Chunk size for assign + letter generation so the UI can show progress. */
+const ASSIGN_BATCH_SIZE = 3;
 type Tab = (typeof TABS)[number];
+
+type AssignBatch = { ids: string[]; mode: "one" | "distribute"; mediatoreIds: string[] };
+type AssignUi = {
+  running: boolean;
+  total: number;
+  done: number;
+  assigned: number;
+  /** Size of the batch currently in flight (0 when idle). */
+  inFlight: number;
+  error?: string;
+};
+
+function chunkIds(ids: string[], size: number): string[][] {
+  const out: string[][] = [];
+  for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size));
+  return out;
+}
+
+/** Build sequential batches. Distribute is remapped to mode=one so round-robin survives chunking. */
+function buildAssignBatches(
+  ids: string[],
+  mode: "one" | "distribute",
+  mediatoreIds: string[],
+): AssignBatch[] {
+  if (mode === "one" || mediatoreIds.length === 1) {
+    return chunkIds(ids, ASSIGN_BATCH_SIZE).map((chunk) => ({
+      ids: chunk,
+      mode: "one" as const,
+      mediatoreIds,
+    }));
+  }
+  const byMed = new Map<string, string[]>();
+  for (let i = 0; i < ids.length; i++) {
+    const med = mediatoreIds[i % mediatoreIds.length]!;
+    const list = byMed.get(med) ?? [];
+    list.push(ids[i]!);
+    byMed.set(med, list);
+  }
+  const batches: AssignBatch[] = [];
+  for (const [med, medIds] of byMed) {
+    for (const chunk of chunkIds(medIds, ASSIGN_BATCH_SIZE)) {
+      batches.push({ ids: chunk, mode: "one", mediatoreIds: [med] });
+    }
+  }
+  return batches;
+}
 
 /** Chiusa = data chiusura + esito valorizzato. */
 const FILTER_CHIUSE =
@@ -42,7 +91,7 @@ function tabBaseFilter(tab: Tab): string {
       return `${FILTER_APERTE} && stato = "registrata"`;
     case "da-pianificare":
       return `${FILTER_APERTE} && stato = "assegnata"`;
-    case "da-notificare":
+    case "da-convocare":
       return `${FILTER_APERTE} && (stato = "da_notificare" || stato = "pianificata")`;
     case "aperte":
       return `${FILTER_APERTE} && stato = "aperta"`;
@@ -100,13 +149,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const canAssign = canCreate;
   const url = new URL(request.url);
 
-  const tabParam = url.searchParams.get("tab")?.trim() ?? "aperte";
+  const tabParamRaw = url.searchParams.get("tab")?.trim() ?? "aperte";
+  // Legacy alias: da-notificare → da-convocare
+  const tabParam = tabParamRaw === "da-notificare" ? "da-convocare" : tabParamRaw;
   const tab: Tab = (TABS as readonly string[]).includes(tabParam) ? (tabParam as Tab) : "aperte";
   // Mediatori cannot use da-assegnare
   const effectiveTab: Tab =
     tab === "da-assegnare" && !canAssign ? "aperte" : tab;
 
   const rgm = url.searchParams.get("rgm")?.trim() ?? "";
+  const codice_cliente = url.searchParams.get("codice_cliente")?.trim() ?? "";
   const oggetto = url.searchParams.get("oggetto")?.trim() ?? "";
   const valore = url.searchParams.get("valore")?.trim() ?? "";
   const esito = url.searchParams.get("esito")?.trim() ?? "";
@@ -144,6 +196,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (role === "mediatore") filterParts.push(`mediatore = "${user.id}"`);
   filterParts.push(tabBaseFilter(effectiveTab));
   if (rgm) filterParts.push(pb.filter("rgm ~ {:rgm}", { rgm }));
+  if (codice_cliente) {
+    filterParts.push(
+      pb.filter("codice_univoco_cliente ~ {:codice_cliente}", { codice_cliente }),
+    );
+  }
   if (oggetto) filterParts.push(pb.filter("oggetto ~ {:oggetto}", { oggetto }));
   if (valore) filterParts.push(pb.filter("valore ~ {:valore}", { valore }));
   if (esito) filterParts.push(`esito_finale = "${esito}"`);
@@ -180,7 +237,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     mediatoriList,
     countDaAssegnare,
     countDaPianificare,
-    countDaNotificare,
+    countDaConvocare,
     countAperte,
   ] = await Promise.all([
     pb.collection("mediazioni_view").getList(page, perPage, {
@@ -221,7 +278,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       .catch(() => 0),
     pb
       .collection("mediazioni_view")
-      .getList(1, 1, { filter: countFilter("da-notificare"), ...noCancel })
+      .getList(1, 1, { filter: countFilter("da-convocare"), ...noCancel })
       .then((r) => r.totalItems ?? 0)
       .catch(() => 0),
     pb
@@ -245,6 +302,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return {
     id: String(m.id),
     rgm: String(m.rgm ?? "—"),
+    codice_cliente: String((m as { codice_univoco_cliente?: string }).codice_univoco_cliente ?? "").trim() || "—",
     oggetto: String(m.oggetto ?? "—"),
     valore: String(m.valore ?? "—"),
     modalita_mediazione: String(m.modalita_mediazione ?? "—"),
@@ -280,11 +338,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
     tabCounts: {
       "da-assegnare": countDaAssegnare,
       "da-pianificare": countDaPianificare,
-      "da-notificare": countDaNotificare,
+      "da-convocare": countDaConvocare,
       aperte: countAperte,
     },
     filters: {
       rgm,
+      codice_cliente,
       oggetto,
       valore,
       esito,
@@ -347,6 +406,7 @@ function DeleteButton({ mediazioneId, canDelete, onDelete }: { mediazioneId: str
 
 function filtersRecordFromLoader(filters: {
   rgm: string;
+  codice_cliente: string;
   oggetto: string;
   valore: string;
   esito: string;
@@ -367,6 +427,7 @@ function filtersRecordFromLoader(filters: {
 }): Record<string, string> {
   return {
     rgm: filters.rgm,
+    codice_cliente: filters.codice_cliente,
     oggetto: filters.oggetto,
     valore: filters.valore,
     esito: filters.esito,
@@ -411,14 +472,20 @@ export default function MediazioniList() {
   const assignFetcher = useFetcher<typeof action>();
   const selectionIdsFetcher = useFetcher<{ ids?: string[]; error?: string }>();
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [flussoDialogOpen, setFlussoDialogOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [lastClickedIndex, setLastClickedIndex] = useState<number | null>(null);
   const [assignMode, setAssignMode] = useState<"one" | "distribute">("one");
   const [mediatoreOne, setMediatoreOne] = useState("");
   const [mediatoreMulti, setMediatoreMulti] = useState<string[]>([]);
+  const [assignUi, setAssignUi] = useState<AssignUi | null>(null);
   const headerCheckboxRef = useRef<HTMLInputElement>(null);
   const pendingSelectionKeyRef = useRef<string | null>(null);
   const lastLoadedSelectionKeyRef = useRef<string | null>(null);
+  const assignQueueRef = useRef<AssignBatch[]>([]);
+  const assignStatsRef = useRef({ total: 0, done: 0, assigned: 0, lastBatch: 0 });
+  /** "sent" = submit issued; "recv" = in flight (seen non-idle); ignore stale fetcher.data until then. */
+  const assignPhaseRef = useRef<"idle" | "sent" | "recv">("idle");
 
   const pageIds = useMemo(() => mediazioni.map((m) => m.id), [mediazioni]);
 
@@ -525,23 +592,114 @@ export default function MediazioniList() {
     setLastClickedIndex(null);
   }
 
-  function submitAssign() {
-    if (selectedIds.length === 0) return;
-    const mediatoreIds =
-      assignMode === "one" ? (mediatoreOne ? [mediatoreOne] : []) : mediatoreMulti;
-    if (mediatoreIds.length === 0) return;
+  function submitAssignBatch(batch: AssignBatch) {
+    assignStatsRef.current.lastBatch = batch.ids.length;
+    assignPhaseRef.current = "sent";
+    setAssignUi((prev) =>
+      prev
+        ? { ...prev, running: true, inFlight: batch.ids.length }
+        : {
+            running: true,
+            total: assignStatsRef.current.total,
+            done: 0,
+            assigned: 0,
+            inFlight: batch.ids.length,
+          },
+    );
     assignFetcher.submit(
       {
         intent: "assegna",
-        ids: selectedIds.join(","),
-        mode: assignMode,
-        mediatoreIds: mediatoreIds.join(","),
+        ids: batch.ids.join(","),
+        mode: batch.mode,
+        mediatoreIds: batch.mediatoreIds.join(","),
       },
-      { method: "post" }
+      { method: "post" },
     );
+  }
+
+  function submitAssign() {
+    if (selectedIds.length === 0 || assignUi?.running) return;
+    const mediatoreIds =
+      assignMode === "one" ? (mediatoreOne ? [mediatoreOne] : []) : mediatoreMulti;
+    if (mediatoreIds.length === 0) return;
+
+    const ids = [...selectedIds];
+    const batches = buildAssignBatches(ids, assignMode, mediatoreIds);
+    if (batches.length === 0) return;
+
+    assignQueueRef.current = batches.slice(1);
+    assignStatsRef.current = { total: ids.length, done: 0, assigned: 0, lastBatch: 0 };
+    setAssignUi({
+      running: true,
+      total: ids.length,
+      done: 0,
+      assigned: 0,
+      inFlight: batches[0]!.ids.length,
+    });
     setSelectedIds([]);
     setLastClickedIndex(null);
+    submitAssignBatch(batches[0]!);
   }
+
+  useEffect(() => {
+    if (assignPhaseRef.current === "sent" && assignFetcher.state !== "idle") {
+      assignPhaseRef.current = "recv";
+    }
+    if (assignPhaseRef.current !== "recv") return;
+    if (assignFetcher.state !== "idle") return;
+
+    const data = assignFetcher.data;
+    if (!data) return;
+
+    const stats = assignStatsRef.current;
+    stats.done = Math.min(stats.total, stats.done + stats.lastBatch);
+
+    if ("error" in data && data.error) {
+      assignPhaseRef.current = "idle";
+      assignQueueRef.current = [];
+      setAssignUi({
+        running: false,
+        total: stats.total,
+        done: stats.done,
+        assigned: stats.assigned,
+        inFlight: 0,
+        error: String(data.error),
+      });
+      return;
+    }
+
+    if ("ok" in data && data.ok) {
+      stats.assigned += Number((data as { assigned?: number }).assigned ?? 0);
+    }
+
+    const next = assignQueueRef.current.shift();
+    if (!next) {
+      assignPhaseRef.current = "idle";
+      setAssignUi({
+        running: false,
+        total: stats.total,
+        done: stats.done,
+        assigned: stats.assigned,
+        inFlight: 0,
+      });
+      return;
+    }
+
+    setAssignUi({
+      running: true,
+      total: stats.total,
+      done: stats.done,
+      assigned: stats.assigned,
+      inFlight: next.ids.length,
+    });
+    submitAssignBatch(next);
+  }, [assignFetcher.state, assignFetcher.data]);
+
+  const isAssigning = assignUi?.running === true;
+  const assignRemaining = assignUi ? Math.max(0, assignUi.total - assignUi.done) : 0;
+  const assignProgressValue = assignUi
+    ? Math.min(assignUi.total, assignUi.done + (assignUi.running ? assignUi.inFlight : 0))
+    : 0;
 
   const cellTruncate = "align-top";
   const headerBgSolid = "bg-base-200";
@@ -549,7 +707,7 @@ export default function MediazioniList() {
   const zebraEven = { backgroundColor: "color-mix(in oklab, var(--color-primary, #3aaeba) 6%, transparent)" };
   const showCheckboxes = canAssign && tab === "da-assegnare";
   const showAdesione = tab === "aperte";
-  const colSpan = (showCheckboxes ? 15 : 14) + (showAdesione ? 1 : 0);
+  const colSpan = (showCheckboxes ? 16 : 15) + (showAdesione ? 1 : 0);
   const adesioneOptions = [
     { value: "si", label: "Sì" },
     { value: "no", label: "No" },
@@ -558,7 +716,7 @@ export default function MediazioniList() {
   const tabItems: { id: Tab; label: string; count?: number; show?: boolean }[] = [
     { id: "da-assegnare", label: "Da assegnare", count: tabCounts["da-assegnare"], show: canAssign },
     { id: "da-pianificare", label: "Da pianificare", count: tabCounts["da-pianificare"], show: true },
-    { id: "da-notificare", label: "Da notificare", count: tabCounts["da-notificare"], show: true },
+    { id: "da-convocare", label: "Da convocare", count: tabCounts["da-convocare"], show: true },
     { id: "aperte", label: "Aperte", count: tabCounts.aperte, show: true },
     { id: "chiuse", label: "Chiuse", show: true },
   ];
@@ -624,9 +782,10 @@ export default function MediazioniList() {
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center justify-center gap-3">
+      <div className="grid grid-cols-1 items-center gap-3 sm:grid-cols-[1fr_auto_1fr]">
+        <div className="hidden sm:block" aria-hidden="true" />
         <nav
-          className="flex overflow-x-auto rounded-lg border border-base-300 bg-base-200/50 p-1"
+          className="flex justify-self-center overflow-x-auto rounded-lg border border-base-300 bg-base-200/50 p-1"
           aria-label="Stato mediazioni"
           role="tablist"
         >
@@ -663,11 +822,28 @@ export default function MediazioniList() {
               );
             })}
         </nav>
-        {tab === "da-pianificare" && (
-          <Link to="/mediazioni/pianifica" className="btn btn-outline btn-sm btn-primary">
-            Pianifica incontri
-          </Link>
-        )}
+        <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-end">
+          {tab === "da-pianificare" && (
+            <Link to="/mediazioni/pianifica" className="btn btn-outline btn-sm btn-primary">
+              Pianifica incontri
+            </Link>
+          )}
+          {tab === "da-convocare" && (
+            <>
+              <button
+                type="button"
+                className="btn btn-outline btn-sm btn-primary gap-1"
+                onClick={() => setFlussoDialogOpen(true)}
+              >
+                <Download className="h-3.5 w-3.5" />
+                Esporta Flusso (ZIP)
+              </button>
+              <Link to="/mediazioni/convocazioni/upload" className="btn btn-outline btn-sm gap-1">
+                Carica ritorno Flusso
+              </Link>
+            </>
+          )}
+        </div>
       </div>
 
       {showCheckboxes && (
@@ -695,6 +871,7 @@ export default function MediazioniList() {
                   type="button"
                   className={`btn btn-sm join-item ${assignMode === "one" ? "btn-primary" : "btn-ghost"}`}
                   onClick={() => setAssignMode("one")}
+                  disabled={isAssigning}
                 >
                   A uno
                 </button>
@@ -702,6 +879,7 @@ export default function MediazioniList() {
                   type="button"
                   className={`btn btn-sm join-item ${assignMode === "distribute" ? "btn-primary" : "btn-ghost"}`}
                   onClick={() => setAssignMode("distribute")}
+                  disabled={isAssigning}
                 >
                   Distribuisci
                 </button>
@@ -712,6 +890,7 @@ export default function MediazioniList() {
                   value={mediatoreOne}
                   onChange={(e) => setMediatoreOne(e.target.value)}
                   aria-label="Mediatore"
+                  disabled={isAssigning}
                 >
                   <option value="">Mediatore…</option>
                   {mediatori.map((m) => (
@@ -722,7 +901,12 @@ export default function MediazioniList() {
                 </select>
               ) : (
                 <div className="dropdown dropdown-end">
-                  <button type="button" tabIndex={0} className="btn btn-sm btn-outline min-w-[11rem] justify-between">
+                  <button
+                    type="button"
+                    tabIndex={0}
+                    className="btn btn-sm btn-outline min-w-[11rem] justify-between"
+                    disabled={isAssigning}
+                  >
                     {mediatoreMulti.length === 0
                       ? "Mediatori…"
                       : `${mediatoreMulti.length} mediatori`}
@@ -757,26 +941,61 @@ export default function MediazioniList() {
               )}
               <button
                 type="button"
-                className="btn btn-primary btn-sm"
+                className="btn btn-primary btn-sm gap-1.5"
                 disabled={
                   selectedIds.length === 0 ||
-                  assignFetcher.state !== "idle" ||
+                  isAssigning ||
                   (assignMode === "one" ? !mediatoreOne : mediatoreMulti.length === 0)
                 }
                 onClick={submitAssign}
               >
-                {assignFetcher.state !== "idle" ? "Assegnazione…" : "Assegna"}
+                {isAssigning ? (
+                  <>
+                    <span className="loading loading-spinner loading-xs" />
+                    Assegnazione…
+                  </>
+                ) : (
+                  "Assegna"
+                )}
               </button>
             </div>
           </div>
-          {assignFetcher.data && "ok" in assignFetcher.data && (
-            <div className="alert alert-success py-2 text-sm">
-              Assegnate {(assignFetcher.data as { assigned?: number }).assigned ?? 0}
+          {assignUi?.running && (
+            <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 space-y-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <span className="font-medium text-base-content flex items-center gap-2">
+                  <span className="loading loading-spinner loading-xs text-primary" />
+                  Assegnazione in corso…
+                </span>
+                <span className="tabular-nums text-base-content/80">
+                  {assignUi.done} / {assignUi.total}
+                  {assignRemaining > 0 ? ` · ne mancano ${assignRemaining}` : ""}
+                </span>
+              </div>
+              <progress
+                className="progress progress-primary w-full h-2"
+                value={assignProgressValue}
+                max={Math.max(1, assignUi.total)}
+              />
+              <p className="text-xs text-base-content/55">
+                Assegnate {assignUi.assigned}
+                {assignUi.inFlight > 0
+                  ? ` · in lavorazione ${assignUi.done + 1}–${Math.min(assignUi.total, assignUi.done + assignUi.inFlight)} (lettere di incarico incluse)`
+                  : ""}
+              </p>
             </div>
           )}
-          {assignFetcher.data && "error" in assignFetcher.data && (
+          {assignUi && !assignUi.running && !assignUi.error && assignUi.total > 0 && (
+            <div className="alert alert-success py-2 text-sm">
+              Assegnate {assignUi.assigned} di {assignUi.total}
+            </div>
+          )}
+          {assignUi?.error && (
             <div className="alert alert-error py-2 text-sm">
-              {String((assignFetcher.data as { error?: string }).error)}
+              {assignUi.error}
+              {assignUi.assigned > 0
+                ? ` · assegnate comunque ${assignUi.assigned} di ${assignUi.total}`
+                : ""}
             </div>
           )}
           {mediatori.length === 0 && (
@@ -791,6 +1010,12 @@ export default function MediazioniList() {
         filters={filtersRecordFromLoader(filters)}
         sortField={sortField}
         order={order}
+      />
+      <ExportFlussoNotificheDialog
+        isOpen={flussoDialogOpen}
+        onClose={() => setFlussoDialogOpen(false)}
+        filters={filtersRecordFromLoader(filters)}
+        totalHint={totalItems}
       />
       <div className="-mx-4 sm:-mx-6 lg:-mx-8">
         <FilterableTable
@@ -976,6 +1201,22 @@ export default function MediazioniList() {
                   <div className={filterableTableHeaderLabelClass}>Nota</div>
                   <FilterTextInput name="nota" defaultValue={filters.nota} placeholder="Cerca nota" />
                 </th>
+                <th className={`${filterableTableThClass} min-w-[130px]`}>
+                  <div className={filterableTableHeaderLabelClass}>
+                    <SortLink
+                      label="Codice cliente"
+                      field="codice_univoco_cliente"
+                      currentSort={sortField}
+                      currentOrder={order}
+                      searchParams={searchParams}
+                    />
+                  </div>
+                  <FilterTextInput
+                    name="codice_cliente"
+                    defaultValue={filters.codice_cliente}
+                    placeholder="Cerca codice…"
+                  />
+                </th>
                 <th
                   className={`${filterableTableThClass} w-[100px] shrink-0 sticky top-0 right-0 z-20 border-l border-base-200 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.05)] ${headerBgSolid} text-right`}
                   style={{ right: "-2px" }}
@@ -1082,6 +1323,11 @@ export default function MediazioniList() {
                       ) : (
                         <span className="block truncate">{m.nota}</span>
                       )}
+                    </td>
+                    <td className="py-2">
+                      <span className="font-mono text-xs truncate block max-w-[140px]" title={m.codice_cliente !== "—" ? m.codice_cliente : undefined}>
+                        {m.codice_cliente}
+                      </span>
                     </td>
                     <td
                       className={`py-2 shrink-0 sticky right-0 z-10 border-l border-base-200 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.05)] align-top ${

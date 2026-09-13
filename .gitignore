@@ -9,4 +9,6 @@ node_modules
 /.claude
 /.pnpm-store/*
 /scripts/
-
+/tmp-*/
+tmp/
+*.tmp

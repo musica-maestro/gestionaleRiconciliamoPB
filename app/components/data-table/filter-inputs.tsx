@@ -1,13 +1,10 @@
 /**
  * Reusable filter inputs for data tables. Shared styling for text, select, and date range.
- * All filters auto-submit the form: text on Enter or after typing stops (debounced),
- * select and date on change.
+ * Text filters submit on Enter (including empty to clear). Select and date submit on change.
  */
 
-import { useRef, useCallback } from "react";
+import { useCallback } from "react";
 import { useFilterFormId } from "./filterable-table";
-
-const DEBOUNCE_MS = 400;
 
 const inputClass =
   "input input-bordered input-sm w-full max-w-full bg-base-100 text-base-content placeholder:opacity-70 " +
@@ -29,8 +26,14 @@ export interface FilterTextInputProps {
   className?: string;
 }
 
-function submitFormFromInput(input: HTMLInputElement | HTMLSelectElement) {
-  input.form?.requestSubmit();
+function submitFormFromInput(
+  input: HTMLInputElement | HTMLSelectElement,
+  formId?: string,
+) {
+  const form =
+    input.form ??
+    (formId ? (document.getElementById(formId) as HTMLFormElement | null) : null);
+  form?.requestSubmit();
 }
 
 export function FilterTextInput({
@@ -41,25 +44,19 @@ export function FilterTextInput({
   className = "",
 }: FilterTextInputProps) {
   const formId = useFilterFormId();
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key !== "Enter") return;
       e.preventDefault();
-      submitFormFromInput(e.currentTarget);
-    }
-  }, []);
-
-  const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      debounceRef.current = null;
-      submitFormFromInput(e.target);
-    }, DEBOUNCE_MS);
-  }, []);
+      submitFormFromInput(e.currentTarget, formId);
+    },
+    [formId],
+  );
 
   return (
     <input
+      key={`${name}:${defaultValue}`}
       name={name}
       type={type}
       form={formId}
@@ -67,7 +64,6 @@ export function FilterTextInput({
       placeholder={placeholder}
       className={`${inputClass} ${className}`}
       onKeyDown={handleKeyDown}
-      onChange={handleChange}
     />
   );
 }

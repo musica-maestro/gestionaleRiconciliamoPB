@@ -61,7 +61,7 @@ const FASE_LABELS_SINGULAR: Record<Fase, string> = {
 };
 
 const COLOR_LEGEND: { id: string; label: string; color: string }[] = [
-  { id: "da_notificare", label: "Da notificare", color: CALENDAR_COLOR_DA_NOTIFICARE },
+  { id: "da_notificare", label: "Da convocare", color: CALENDAR_COLOR_DA_NOTIFICARE },
   { id: "senza_esito", label: "Senza esito", color: CALENDAR_COLOR_NO_ESITO },
   ...ESITO_FINALE_VALUES.map((label) => ({
     id: label,

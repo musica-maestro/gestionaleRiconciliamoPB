@@ -22,6 +22,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const filterParts: string[] = [`${filterAperte} && stato = "registrata"`];
 
   const rgm = url.searchParams.get("rgm")?.trim() ?? "";
+  const codice_cliente = url.searchParams.get("codice_cliente")?.trim() ?? "";
   const oggetto = url.searchParams.get("oggetto")?.trim() ?? "";
   const valore = url.searchParams.get("valore")?.trim() ?? "";
   const esito = url.searchParams.get("esito")?.trim() ?? "";
@@ -40,6 +41,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const mediatore = url.searchParams.get("mediatore")?.trim() ?? "";
 
   if (rgm) filterParts.push(pb.filter("rgm ~ {:rgm}", { rgm }));
+  if (codice_cliente) {
+    filterParts.push(
+      pb.filter("codice_univoco_cliente ~ {:codice_cliente}", { codice_cliente }),
+    );
+  }
   if (oggetto) filterParts.push(pb.filter("oggetto ~ {:oggetto}", { oggetto }));
   if (valore) filterParts.push(pb.filter("valore ~ {:valore}", { valore }));
   if (esito) filterParts.push(`esito_finale = "${esito}"`);

@@ -2,8 +2,9 @@ import { createReport } from "docx-templates";
 import JSZip from "jszip";
 import type PocketBase from "pocketbase";
 import { convertDocxToPdf } from "~/lib/gotenberg.server";
+import { MODELLO_LETTERA_INCARICO_NOME } from "~/lib/modelli-notifiche";
 
-export const MODELLO_LETTERA_INCARICO_NOME = "Lettera incarico mediatore";
+export { MODELLO_LETTERA_INCARICO_NOME };
 export const TIPO_LETTERA_INCARICO_NOME = "Lettera di incarico";
 const LETTERA_OBSOLETA_PREFIX = "OBSOLETA";
 

@@ -7,6 +7,7 @@ import {
   FileText,
   FolderOpen,
   ListChecks,
+  Mail,
   MapPin,
   Plus,
   Scale,
@@ -16,6 +17,11 @@ import {
 } from "lucide-react";
 import { requireUserAndRole } from "~/lib/auth.server";
 import { isUploadedFile } from "~/lib/form-data.server";
+import {
+  MODELLO_LETTERA_INCARICO_NOME,
+  MODELLI_NOTIFICHE_FISSI,
+  MODELLI_NOTIFICHE_NOMI,
+} from "~/lib/modelli-notifiche";
 import { createPB, getPocketbaseBaseUrl } from "~/lib/pocketbase.server";
 
 type Opzione = {
@@ -41,8 +47,6 @@ type ModelloDocumento = {
   fileUrl?: string | null;
 };
 
-const MODELLO_LETTERA_INCARICO = "Lettera incarico mediatore";
-
 const SECTIONS = [
   { id: "modelli", label: "Modelli", icon: FolderOpen },
   { id: "tipi", label: "Tipi documento", icon: FileText },
@@ -56,8 +60,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { pb } = await createPB(request);
   const baseUrl = getPocketbaseBaseUrl();
 
-  const [tipi, scaglioni, modalita, competenze, motivazioneDeposito, modalitaConvocazione, materia, modelliRaw] =
-    await Promise.all([
+  const [
+    tipi,
+    scaglioni,
+    modalita,
+    competenze,
+    motivazioneDeposito,
+    modalitaConvocazione,
+    materia,
+    motivoRaccomandata,
+    modelliRaw,
+  ] = await Promise.all([
       pb.collection("documenti_tipi").getFullList<DocumentoTipo>({ sort: "nome" }).catch(() => [] as DocumentoTipo[]),
       pb.collection("scaglioni_mediazione").getFullList<Opzione>({ sort: "nome" }).catch(() => [] as Opzione[]),
       pb.collection("modalita_opzioni").getFullList<Opzione>({ sort: "nome" }).catch(() => [] as Opzione[]),
@@ -65,6 +78,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       pb.collection("motivazione_deposito_opzioni").getFullList<Opzione>({ sort: "nome" }).catch(() => [] as Opzione[]),
       pb.collection("modalita_convocazione_opzioni").getFullList<Opzione>({ sort: "nome" }).catch(() => [] as Opzione[]),
       pb.collection("materia_opzioni").getFullList<Opzione>({ sort: "nome" }).catch(() => [] as Opzione[]),
+      pb.collection("motivo_raccomandata_opzioni").getFullList<Opzione>({ sort: "nome" }).catch(() => [] as Opzione[]),
       pb
         .collection("modelli_documenti")
         .getFullList<ModelloDocumento>({ sort: "nome" })
@@ -96,8 +110,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
     motivazioneDeposito,
     modalitaConvocazione,
     materia,
+    motivoRaccomandata,
     modelli,
-    modelloLetteraNome: MODELLO_LETTERA_INCARICO,
+    modelloLetteraNome: MODELLO_LETTERA_INCARICO_NOME,
+    modelliNotifiche: MODELLI_NOTIFICHE_FISSI,
   });
 }
 
@@ -167,6 +183,14 @@ export async function action({ request }: ActionFunctionArgs) {
     const id = String(formData.get("id") ?? "");
     const current = formData.get("current") === "true";
     if (id) await pb.collection("materia_opzioni").update(id, { attivo: !current });
+  } else if (intent === "add_motivo_raccomandata") {
+    const nome = String(formData.get("nome") ?? "").trim();
+    if (!nome) return go();
+    await pb.collection("motivo_raccomandata_opzioni").create({ nome, attivo: true });
+  } else if (intent === "toggle_motivo_raccomandata") {
+    const id = String(formData.get("id") ?? "");
+    const current = formData.get("current") === "true";
+    if (id) await pb.collection("motivo_raccomandata_opzioni").update(id, { attivo: !current });
   } else if (intent === "upsert_modello") {
     const id = String(formData.get("id") ?? "").trim();
     const nome = String(formData.get("nome") ?? "").trim();
@@ -342,6 +366,148 @@ function OpzioneSection({
   );
 }
 
+function FixedModelloCard({
+  nome,
+  descrizione,
+  record,
+  placeholders,
+  fileDescription,
+  accent = false,
+  compact = false,
+}: {
+  nome: string;
+  descrizione: string;
+  record: ModelloDocumento | null;
+  placeholders?: string[];
+  fileDescription: string;
+  accent?: boolean;
+  compact?: boolean;
+}) {
+  return (
+    <section
+      className={
+        compact
+          ? "rounded-xl border border-base-200 bg-base-100 overflow-hidden"
+          : "rounded-2xl border border-base-300 bg-base-100 shadow-sm overflow-hidden"
+      }
+    >
+      <div
+        className={
+          accent
+            ? "border-b border-base-200 bg-gradient-to-r from-[#3aaeba]/10 to-transparent px-5 py-4"
+            : "border-b border-base-200 px-4 py-3"
+        }
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-start gap-3 min-w-0">
+            {!compact && (
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#3aaeba]/15 text-[#2a8f99]">
+                <Upload className="h-5 w-5" />
+              </span>
+            )}
+            <div className="min-w-0">
+              <h2 className={`font-semibold text-base-content ${compact ? "text-sm" : ""}`}>
+                {nome}
+              </h2>
+              <p className="mt-0.5 text-sm text-base-content/65 max-w-2xl">{descrizione}</p>
+            </div>
+          </div>
+          {record ? (
+            <span
+              className={
+                record.attivo ? "badge badge-success border-0" : "badge badge-ghost"
+              }
+            >
+              {record.attivo ? "Pronto" : "Disattivo"}
+            </span>
+          ) : (
+            <span className="badge badge-warning border-0">Da caricare</span>
+          )}
+        </div>
+      </div>
+
+      <div className={`space-y-3 ${compact ? "p-4" : "p-5 space-y-4"}`}>
+        {placeholders && placeholders.length > 0 && (
+          <div className="rounded-xl bg-base-200/40 border border-base-200 px-4 py-3">
+            <p className="text-xs font-medium text-base-content/70 mb-1.5">Placeholder nel file</p>
+            <div className="flex flex-wrap gap-1.5">
+              {placeholders.map((p) => (
+                <code
+                  key={p}
+                  className="rounded-md bg-base-100 border border-base-300 px-1.5 py-0.5 text-[11px] text-base-content/80"
+                >
+                  {p}
+                </code>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <Form
+          method="post"
+          encType="multipart/form-data"
+          className="flex flex-col sm:flex-row sm:items-end gap-3"
+        >
+          <input type="hidden" name="_action" value="upsert_modello" />
+          <input type="hidden" name="_section" value="modelli" />
+          <input type="hidden" name="nome" value={nome} />
+          {record && <input type="hidden" name="id" value={record.id} />}
+          <input type="hidden" name="descrizione" value={fileDescription} />
+          <div className="flex-1 min-w-0">
+            <label className="label py-0 mb-1">
+              <span className="label-text text-xs font-medium">
+                File .docx {record ? "(sostituisci)" : "*"}
+              </span>
+            </label>
+            <input
+              name="file"
+              type="file"
+              accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              required={!record}
+              className="file-input file-input-bordered file-input-sm w-full"
+            />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {record?.fileUrl && (
+              <a
+                href={record.fileUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="btn btn-sm btn-ghost gap-1"
+              >
+                <Download className="h-3.5 w-3.5" />
+                Scarica
+              </a>
+            )}
+            <button
+              type="submit"
+              className="btn btn-sm border-0 bg-[#3aaeba] hover:bg-[#349aa5] text-white gap-1"
+            >
+              <Upload className="h-3.5 w-3.5" />
+              {record ? "Aggiorna" : "Carica"}
+            </button>
+          </div>
+        </Form>
+
+        {record && (
+          <div className="flex flex-wrap items-center gap-3 text-xs text-base-content/60">
+            <Form method="post">
+              <input type="hidden" name="_action" value="toggle_modello" />
+              <input type="hidden" name="_section" value="modelli" />
+              <input type="hidden" name="id" value={record.id} />
+              <input type="hidden" name="current" value={String(record.attivo)} />
+              <button type="submit" className="link link-hover text-xs">
+                {record.attivo ? "Disattiva modello" : "Riattiva modello"}
+              </button>
+            </Form>
+            {record.file && <span>File: {record.file}</span>}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export default function AdminSettingsIndex() {
   const {
     tipi,
@@ -351,15 +517,22 @@ export default function AdminSettingsIndex() {
     motivazioneDeposito,
     modalitaConvocazione,
     materia,
+    motivoRaccomandata,
     modelli,
     modelloLetteraNome,
+    modelliNotifiche,
   } = useLoaderData<typeof loader>();
   const [searchParams, setSearchParams] = useSearchParams();
   const section = searchParams.get("section") || "modelli";
   const justSaved = searchParams.get("saved") === "1";
 
   const letteraModello = modelli.find((m) => m.nome === modelloLetteraNome) ?? null;
-  const altriModelli = modelli.filter((m) => m.nome !== modelloLetteraNome);
+  const fixedNomi = new Set<string>([modelloLetteraNome, ...MODELLI_NOTIFICHE_NOMI]);
+  const altriModelli = modelli.filter((m) => !fixedNomi.has(m.nome));
+  const modelliNotificheCards = modelliNotifiche.map((meta) => ({
+    ...meta,
+    record: modelli.find((m) => m.nome === meta.nome) ?? null,
+  }));
 
   const setSection = (id: string) => {
     const next = new URLSearchParams(searchParams);
@@ -396,7 +569,13 @@ export default function AdminSettingsIndex() {
           if (s.id === "tipi") count = tipi.length;
           if (s.id === "valore") count = scaglioni.length;
           if (s.id === "modalita") count = modalita.length + modalitaConvocazione.length;
-          if (s.id === "altro") count = motivazioneDeposito.length + materia.length + competenze.length;
+          if (s.id === "altro") {
+            count =
+              motivazioneDeposito.length +
+              materia.length +
+              competenze.length +
+              motivoRaccomandata.length;
+          }
           return (
             <button
               key={s.id}
@@ -418,127 +597,45 @@ export default function AdminSettingsIndex() {
 
       {section === "modelli" && (
         <div className="space-y-5">
-          <section className="rounded-2xl border border-base-300 bg-base-100 shadow-sm overflow-hidden">
-            <div className="border-b border-base-200 bg-gradient-to-r from-[#3aaeba]/10 to-transparent px-5 py-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="flex items-start gap-3">
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#3aaeba]/15 text-[#2a8f99]">
-                    <Upload className="h-5 w-5" />
-                  </span>
-                  <div>
-                    <h2 className="font-semibold text-base-content">{modelloLetteraNome}</h2>
-                    <p className="mt-0.5 text-sm text-base-content/65 max-w-2xl">
-                      Modello .docx compilato (placeholder &lt;campo&gt; / &lt;&lt;campo&gt;&gt;) e allegato
-                      in PDF a ogni mediazione quando viene assegnata o riassegnata a un mediatore.
-                    </p>
-                  </div>
-                </div>
-                {letteraModello ? (
-                  <span
-                    className={
-                      letteraModello.attivo
-                        ? "badge badge-success border-0"
-                        : "badge badge-ghost"
-                    }
-                  >
-                    {letteraModello.attivo ? "Pronto" : "Disattivo"}
-                  </span>
-                ) : (
-                  <span className="badge badge-warning border-0">Da caricare</span>
-                )}
-              </div>
-            </div>
+          <FixedModelloCard
+            nome={modelloLetteraNome}
+            descrizione="Modello .docx compilato (placeholder &lt;campo&gt; / &lt;&lt;campo&gt;&gt;) e allegato in PDF a ogni mediazione quando viene assegnata o riassegnata a un mediatore."
+            record={letteraModello}
+            placeholders={[
+              "<Dott_sa>",
+              "<nome_mediatore>",
+              "<RGM>",
+              "<il_sottoscritto_la_sottoscritta>",
+              "<lo_la>",
+              "<designato_a>",
+              "<FIRMA_MEDIATORE>",
+              "<<RGM>>",
+            ]}
+            fileDescription="Modello lettera di incarico generata all'assegnazione"
+            accent
+          />
 
+          <div className="rounded-2xl border border-base-300 bg-base-100 shadow-sm overflow-hidden">
+            <div className="border-b border-base-200 px-5 py-4">
+              <h2 className="font-semibold text-base-content">Modelli notifiche (flusso)</h2>
+              <p className="mt-0.5 text-sm text-base-content/65">
+                Convocazioni e modulo di adesione usati dall&apos;export Flusso su Da convocare.
+                Selezione automatica in base a persona fisica/giuridica e competenza attiva.
+              </p>
+            </div>
             <div className="p-5 space-y-4">
-              <div className="rounded-xl bg-base-200/40 border border-base-200 px-4 py-3">
-                <p className="text-xs font-medium text-base-content/70 mb-1.5">Placeholder nel file</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {[
-                    "<Dott_sa>",
-                    "<nome_mediatore>",
-                    "<RGM>",
-                    "<il_sottoscritto_la_sottoscritta>",
-                    "<lo_la>",
-                    "<designato_a>",
-                    "<FIRMA_MEDIATORE>",
-                    "<<RGM>>",
-                  ].map((p) => (
-                    <code
-                      key={p}
-                      className="rounded-md bg-base-100 border border-base-300 px-1.5 py-0.5 text-[11px] text-base-content/80"
-                    >
-                      {p}
-                    </code>
-                  ))}
-                </div>
-              </div>
-
-              <Form
-                method="post"
-                encType="multipart/form-data"
-                className="flex flex-col sm:flex-row sm:items-end gap-3"
-              >
-                <input type="hidden" name="_action" value="upsert_modello" />
-                <input type="hidden" name="_section" value="modelli" />
-                <input type="hidden" name="nome" value={modelloLetteraNome} />
-                {letteraModello && <input type="hidden" name="id" value={letteraModello.id} />}
-                <input
-                  type="hidden"
-                  name="descrizione"
-                  value="Modello lettera di incarico generata all'assegnazione"
+              {modelliNotificheCards.map((card) => (
+                <FixedModelloCard
+                  key={card.nome}
+                  nome={card.nome}
+                  descrizione={card.descrizione}
+                  record={card.record}
+                  fileDescription={card.descrizione}
+                  compact
                 />
-                <div className="flex-1 min-w-0">
-                  <label className="label py-0 mb-1">
-                    <span className="label-text text-xs font-medium">
-                      File .docx {letteraModello ? "(sostituisci)" : "*"}
-                    </span>
-                  </label>
-                  <input
-                    name="file"
-                    type="file"
-                    accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    required={!letteraModello}
-                    className="file-input file-input-bordered file-input-sm w-full"
-                  />
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {letteraModello?.fileUrl && (
-                    <a
-                      href={letteraModello.fileUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="btn btn-sm btn-ghost gap-1"
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                      Scarica
-                    </a>
-                  )}
-                  <button
-                    type="submit"
-                    className="btn btn-sm border-0 bg-[#3aaeba] hover:bg-[#349aa5] text-white gap-1"
-                  >
-                    <Upload className="h-3.5 w-3.5" />
-                    {letteraModello ? "Aggiorna" : "Carica"}
-                  </button>
-                </div>
-              </Form>
-
-              {letteraModello && (
-                <div className="flex flex-wrap items-center gap-3 text-xs text-base-content/60">
-                  <Form method="post">
-                    <input type="hidden" name="_action" value="toggle_modello" />
-                    <input type="hidden" name="_section" value="modelli" />
-                    <input type="hidden" name="id" value={letteraModello.id} />
-                    <input type="hidden" name="current" value={String(letteraModello.attivo)} />
-                    <button type="submit" className="link link-hover text-xs">
-                      {letteraModello.attivo ? "Disattiva modello" : "Riattiva modello"}
-                    </button>
-                  </Form>
-                  {letteraModello.file && <span>File: {letteraModello.file}</span>}
-                </div>
-              )}
+              ))}
             </div>
-          </section>
+          </div>
 
           <section className="rounded-2xl border border-base-300 bg-base-100 shadow-sm overflow-hidden">
             <div className="border-b border-base-200 px-5 py-4 flex items-center gap-3">
@@ -754,6 +851,16 @@ export default function AdminSettingsIndex() {
             nomePlaceholder="es. Roma, Milano, Napoli"
             section="altro"
             icon={MapPin}
+          />
+          <OpzioneSection
+            title="Motivi raccomandata non consegnabile"
+            description="Motivi selezionabili quando lo stato raccomandata è «Non consegnabile»."
+            addAction="add_motivo_raccomandata"
+            toggleAction="toggle_motivo_raccomandata"
+            items={motivoRaccomandata}
+            nomePlaceholder="es. Destinatario sconosciuto, Compiuta giacenza"
+            section="altro"
+            icon={Mail}
           />
         </div>
       )}

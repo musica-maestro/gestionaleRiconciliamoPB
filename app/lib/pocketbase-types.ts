@@ -31,6 +31,7 @@ export enum Collections {
   ModalitaOpzioni = "modalita_opzioni",
   ModelliDocumenti = "modelli_documenti",
   MotivazioneDepositoOpzioni = "motivazione_deposito_opzioni",
+  MotivoRaccomandataOpzioni = "motivo_raccomandata_opzioni",
   Notifiche = "notifiche",
   Partecipazioni = "partecipazioni",
   ScaglioniMediazione = "scaglioni_mediazione",
@@ -76,13 +77,17 @@ export enum ConvocazioniTipologiaOptions {
   "Raccomandata" = "Raccomandata",
 }
 
+export enum ConvocazioniStatoRaccomandataOptions {
+  "Consegnata" = "Consegnata",
+  "Non consegnabile" = "Non consegnabile",
+}
+
 export enum DashboardChiusePerEsitoMeseEsitoFinaleOptions {
   "Accordo" = "Accordo",
   "Mancato accordo" = "Mancato accordo",
   "Chiusa d'ufficio" = "Chiusa d'ufficio",
   "Ritirata" = "Ritirata",
   "Nessuna risposta" = "Nessuna risposta",
-  "Non consegnabile" = "Non consegnabile",
   "Nessuna adesione" = "Nessuna adesione",
 }
 
@@ -92,7 +97,6 @@ export enum MediazioniEsitoFinaleOptions {
   "Chiusa d'ufficio" = "Chiusa d'ufficio",
   "Ritirata" = "Ritirata",
   "Nessuna risposta" = "Nessuna risposta",
-  "Non consegnabile" = "Non consegnabile",
   "Nessuna adesione" = "Nessuna adesione",
 }
 
@@ -109,7 +113,6 @@ export enum MediazioniViewEsitoFinaleOptions {
   "Chiusa d'ufficio" = "Chiusa d'ufficio",
   "Ritirata" = "Ritirata",
   "Nessuna risposta" = "Nessuna risposta",
-  "Non consegnabile" = "Non consegnabile",
   "Nessuna adesione" = "Nessuna adesione",
 }
 
@@ -220,6 +223,8 @@ export type AvvocatiRecord = {
   telefono?: string
   numero_tessera_foro?: string
   foro_di_appartenenza?: string
+  codice_fiscale?: string
+  indirizzo?: string
 }
 export type CompetenzaOpzioniRecord = {
   id: string
@@ -238,6 +243,8 @@ export type ConvocazioniRecord = {
   link_tracciamento_poste?: string
   nota?: string
   link_legacy?: string
+  stato_raccomandata?: ConvocazioniStatoRaccomandataOptions
+  motivo_raccomandata?: string
 }
 export type DashboardApertePerMediatoreRecord = {
   id: string
@@ -412,6 +419,13 @@ export type MotivazioneDepositoOpzioniRecord = {
   created?: IsoDateString
   updated?: IsoDateString
 }
+export type MotivoRaccomandataOpzioniRecord = {
+  id: string
+  nome: string
+  attivo: boolean
+  created?: IsoDateString
+  updated?: IsoDateString
+}
 export type NotificheRecord = {
   id: string
   destinatario: RecordIdString
@@ -501,6 +515,7 @@ export type ModalitaConvocazioneOpzioniResponse<Texpand = unknown> = Required<Mo
 export type ModalitaOpzioniResponse<Texpand = unknown> = Required<ModalitaOpzioniRecord> & BaseSystemFields<Texpand>
 export type ModelliDocumentiResponse<Texpand = unknown> = Required<ModelliDocumentiRecord> & BaseSystemFields<Texpand>
 export type MotivazioneDepositoOpzioniResponse<Texpand = unknown> = Required<MotivazioneDepositoOpzioniRecord> & BaseSystemFields<Texpand>
+export type MotivoRaccomandataOpzioniResponse<Texpand = unknown> = Required<MotivoRaccomandataOpzioniRecord> & BaseSystemFields<Texpand>
 export type NotificheResponse<Texpand = unknown> = Required<NotificheRecord> & BaseSystemFields<Texpand>
 export type PartecipazioniResponse<Texpand = unknown> = Required<PartecipazioniRecord> & BaseSystemFields<Texpand>
 export type ScaglioniMediazioneResponse<Texpand = unknown> = Required<ScaglioniMediazioneRecord> & BaseSystemFields<Texpand>
@@ -533,6 +548,7 @@ export type CollectionRecords = {
   "modalita_opzioni": ModalitaOpzioniRecord
   "modelli_documenti": ModelliDocumentiRecord
   "motivazione_deposito_opzioni": MotivazioneDepositoOpzioniRecord
+  "motivo_raccomandata_opzioni": MotivoRaccomandataOpzioniRecord
   "notifiche": NotificheRecord
   "partecipazioni": PartecipazioniRecord
   "scaglioni_mediazione": ScaglioniMediazioneRecord
@@ -566,6 +582,7 @@ export type CollectionResponses = {
   "modalita_opzioni": ModalitaOpzioniResponse
   "modelli_documenti": ModelliDocumentiResponse
   "motivazione_deposito_opzioni": MotivazioneDepositoOpzioniResponse
+  "motivo_raccomandata_opzioni": MotivoRaccomandataOpzioniResponse
   "notifiche": NotificheResponse
   "partecipazioni": PartecipazioniResponse
   "scaglioni_mediazione": ScaglioniMediazioneResponse
