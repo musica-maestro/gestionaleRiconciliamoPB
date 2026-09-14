@@ -48,6 +48,8 @@ const ALIASES: Record<string, EsitoFinale> = {
   "chiusa d ufficio": "Chiusa d'ufficio",
   ritirata: "Ritirata",
   "nessuna risposta": "Nessuna risposta",
+  nr: "Nessuna risposta",
+  "mancata comparizione": "Nessuna risposta",
   "nessuna adesione": "Nessuna adesione",
   improcedibile: "Ritirata",
   // legacy: treat old "In corso" / "Non consegnabile" as empty (moved to stato_raccomandata)
@@ -62,8 +64,15 @@ export function normalizeEsitoFinale(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return "";
   const key = normalizeKey(trimmed);
-  // Legacy values no longer used as esito (open / stato_raccomandata)
-  if (key === "in corso" || key === "non consegnabile") return "";
+  // Legacy / aperti: non sono esiti finali
+  if (
+    key === "in corso" ||
+    key === "non consegnabile" ||
+    key === "aperta" ||
+    key === "esito gestionale"
+  ) {
+    return "";
+  }
   return ALIASES[key] ?? BY_KEY.get(key) ?? trimmed;
 }
 

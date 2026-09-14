@@ -4,7 +4,7 @@ import { json, redirect, type ActionFunctionArgs, type LoaderFunctionArgs } from
 import * as XLSX from "xlsx";
 import { requireUserAndRole } from "~/lib/auth.server";
 import { createPB } from "~/lib/pocketbase.server";
-import { mapExcelRowsToImport, type ImportRow } from "~/lib/import-mediazioni-mapping";
+import { mapExcelWorkbookToImport, type ImportRow } from "~/lib/import-mediazioni-mapping";
 import { importRows } from "~/lib/import-mediazioni.server";
 import { Upload, FileSpreadsheet, Loader2, ExternalLink, UserCheck, UserPlus } from "lucide-react";
 
@@ -130,6 +130,7 @@ export default function ImportMediazioni() {
   const soggetti = loaderData?.soggetti ?? [];
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [parsedRows, setParsedRows] = useState<ImportRow[]>([]);
+  const [detectedFormat, setDetectedFormat] = useState<"check" | "tracciato" | null>(null);
   const fetcher = useFetcher<typeof action>();
 
   const isImporting = fetcher.state === "submitting" || fetcher.state === "loading";
@@ -139,14 +140,18 @@ export default function ImportMediazioni() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    const nameLower = file.name.toLowerCase();
     const isExcel =
-      file.name.endsWith(".xlsx") ||
-      file.name.endsWith(".xls") ||
+      nameLower.endsWith(".xlsx") ||
+      nameLower.endsWith(".xls") ||
+      nameLower.endsWith(".xlsm") ||
       file.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
-      file.type === "application/vnd.ms-excel";
+      file.type === "application/vnd.ms-excel" ||
+      file.type === "application/vnd.ms-excel.sheet.macroEnabled.12";
 
     if (!isExcel) {
       setParsedRows([]);
+      setDetectedFormat(null);
       return;
     }
 
@@ -156,15 +161,33 @@ export default function ImportMediazioni() {
         const data = ev.target?.result;
         if (!data) return;
         const workbook = XLSX.read(data, { type: "binary" });
-        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-        const jsonRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(firstSheet, {
-          defval: "",
-          raw: true,
+        const sheetNames = workbook.SheetNames;
+        const mediazioniName =
+          sheetNames.find((n) => n.trim().toLowerCase() === "mediazioni") ||
+          sheetNames[0];
+        const trasmessiName = sheetNames.find(
+          (n) => n.trim().toLowerCase() === "trasmessi"
+        );
+        const mediazioniSheet = workbook.Sheets[mediazioniName!];
+        const mediazioniRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(
+          mediazioniSheet,
+          { defval: "", raw: true }
+        );
+        const trasmessiRows = trasmessiName
+          ? XLSX.utils.sheet_to_json<Record<string, unknown>>(
+              workbook.Sheets[trasmessiName],
+              { defval: "", raw: true }
+            )
+          : null;
+        const rows = mapExcelWorkbookToImport({
+          mediazioniRows,
+          trasmessiRows,
         });
-        const rows = mapExcelRowsToImport(jsonRows);
         setParsedRows(rows);
+        setDetectedFormat(rows[0]?.sourceFormat === "check" ? "check" : "tracciato");
       } catch {
         setParsedRows([]);
+        setDetectedFormat(null);
       }
     };
     reader.readAsBinaryString(file);
@@ -193,15 +216,16 @@ export default function ImportMediazioni() {
 
       <h1 className="text-2xl font-semibold text-slate-800 mb-2">Importa mediazioni</h1>
       <p className="text-slate-600 mb-6">
-        Carica un file Excel nel formato Tracciato Organismo. Il file verrà analizzato e potrai
-        verificare le righe prima di importarle nel database.
+        Carica un Excel nel formato <strong>Tracciato Organismo</strong> oppure{" "}
+        <strong>Check Mediazioni</strong> (fogli Mediazioni + Trasmessi). Anteprima prima
+        dell&apos;import nel database.
       </p>
 
       <div className="mb-6">
         <input
           ref={fileInputRef}
           type="file"
-          accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+          accept=".xlsx,.xls,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/vnd.ms-excel.sheet.macroEnabled.12"
           onChange={onFileSelected}
           className="hidden"
         />
@@ -216,7 +240,12 @@ export default function ImportMediazioni() {
         </button>
         {parsedRows.length > 0 && (
           <span className="ml-3 text-sm text-slate-500">
-            {parsedRows.length} righe pronte per l&apos;anteprima
+            {parsedRows.length} righe pronte
+            {detectedFormat === "check"
+              ? " (formato Check Mediazioni)"
+              : detectedFormat === "tracciato"
+                ? " (Tracciato Organismo)"
+                : ""}
           </span>
         )}
       </div>
@@ -224,9 +253,20 @@ export default function ImportMediazioni() {
       {parsedRows.length > 0 && (
         <>
           <p className="text-sm text-slate-600 mb-2">
-            Controlla i dati qui sotto. Istante/Chiamato in DB verranno riutilizzati (campi vuoti
-            aggiornati dall&apos;Excel). Link Istanza e Cartella &rarr; documenti. Data e ora
-            incontro &rarr; record in Incontri.
+            {detectedFormat === "check" ? (
+              <>
+                Formato Check: aggiorna per RGM data iscrizione/chiusura, esito, mediatore,
+                link (istanza / adesione / chiusura) e flag <em>trasmessa</em> dal foglio
+                Trasmessi. Istante/Chiamato senza CF non ricreano soggetti se la mediazione
+                esiste già.
+              </>
+            ) : (
+              <>
+                Controlla i dati qui sotto. Istante/Chiamato in DB verranno riutilizzati (campi
+                vuoti aggiornati dall&apos;Excel). Link Istanza e Cartella &rarr; documenti. Data
+                e ora incontro &rarr; record in Incontri.
+              </>
+            )}
           </p>
 
           {actionData && "message" in actionData && (
@@ -248,19 +288,35 @@ export default function ImportMediazioni() {
                   <tr>
                     <th className="min-w-[36px]">#</th>
                     <th className="min-w-[110px]">RGM</th>
-                    <th className="min-w-[110px]">Data deposito</th>
-                    <th className="min-w-[110px]">Data protocollo</th>
-                    <th className="min-w-[140px]">Incontro (data &middot; ora)</th>
+                    <th className="min-w-[110px]">
+                      {detectedFormat === "check" ? "Data iscrizione" : "Data deposito"}
+                    </th>
+                    {detectedFormat === "check" ? (
+                      <>
+                        <th className="min-w-[110px]">Data chiusura</th>
+                        <th className="min-w-[140px]">Esito</th>
+                        <th className="min-w-[90px]">Trasmessa</th>
+                      </>
+                    ) : (
+                      <>
+                        <th className="min-w-[110px]">Data protocollo</th>
+                        <th className="min-w-[140px]">Incontro (data &middot; ora)</th>
+                      </>
+                    )}
                     <th className="min-w-[120px]">Mediatore</th>
                     <th className="min-w-[190px]">Istante</th>
                     <th className="min-w-[190px]">Avvocato</th>
                     <th className="min-w-[190px]">Chiamato</th>
-                    <th className="min-w-[210px]">Oggetto / Materia</th>
-                    <th className="min-w-[150px]">Valore</th>
-                    <th className="min-w-[100px]">Competenza</th>
-                    <th className="min-w-[120px]">Modalità</th>
-                    <th className="min-w-[210px]">Modalità conv.</th>
-                    <th className="min-w-[210px]">Motivazione deposito</th>
+                    {detectedFormat !== "check" && (
+                      <>
+                        <th className="min-w-[210px]">Oggetto / Materia</th>
+                        <th className="min-w-[150px]">Valore</th>
+                        <th className="min-w-[100px]">Competenza</th>
+                        <th className="min-w-[120px]">Modalità</th>
+                        <th className="min-w-[210px]">Modalità conv.</th>
+                        <th className="min-w-[210px]">Motivazione deposito</th>
+                      </>
+                    )}
                     <th className="min-w-[120px]">Link</th>
                   </tr>
                 </thead>
@@ -270,6 +326,10 @@ export default function ImportMediazioni() {
                     const chiamatoMatch = matchSoggetto(soggetti, row.parteChiamato);
                     const linkIstanza = (row.mediazionePayload.link_istanza || "").trim();
                     const linkCartella = (row.mediazionePayload.link_cartella || "").trim();
+                    const linkAdesione = (row.mediazionePayload.link_adesione || "").trim();
+                    const linkChiusura = (
+                      row.mediazionePayload.link_documento_chiusura || ""
+                    ).trim();
                     const isUrl = (s: string) =>
                       s.startsWith("http://") || s.startsWith("https://");
                     const avvLabel = [row.avvocatoIstante.nome, row.avvocatoIstante.cognome]
@@ -284,21 +344,41 @@ export default function ImportMediazioni() {
                         <td className="py-2 whitespace-nowrap">
                           {formatDateIT(row.mediazionePayload.data_deposito)}
                         </td>
-                        <td className="py-2 whitespace-nowrap">
-                          {formatDateIT(row.mediazionePayload.data_protocollo)}
-                        </td>
-                        <td className="py-2 whitespace-nowrap">
-                          {row.mediazionePayload.data_incontro ? (
-                            <span className="text-sm">
-                              {formatDateIT(row.mediazionePayload.data_incontro)}
-                              {row.mediazionePayload.ora_incontro && (
-                                <> &middot; {row.mediazionePayload.ora_incontro}</>
+                        {detectedFormat === "check" ? (
+                          <>
+                            <td className="py-2 whitespace-nowrap">
+                              {formatDateIT(row.mediazionePayload.data_chiusura)}
+                            </td>
+                            <td className="py-2 whitespace-nowrap">
+                              {row.mediazionePayload.esito_finale || "—"}
+                            </td>
+                            <td className="py-2 whitespace-nowrap">
+                              {row.mediazionePayload.trasmessa_set
+                                ? row.mediazionePayload.trasmessa
+                                  ? "Sì"
+                                  : "No"
+                                : "—"}
+                            </td>
+                          </>
+                        ) : (
+                          <>
+                            <td className="py-2 whitespace-nowrap">
+                              {formatDateIT(row.mediazionePayload.data_protocollo)}
+                            </td>
+                            <td className="py-2 whitespace-nowrap">
+                              {row.mediazionePayload.data_incontro ? (
+                                <span className="text-sm">
+                                  {formatDateIT(row.mediazionePayload.data_incontro)}
+                                  {row.mediazionePayload.ora_incontro && (
+                                    <> &middot; {row.mediazionePayload.ora_incontro}</>
+                                  )}
+                                </span>
+                              ) : (
+                                "—"
                               )}
-                            </span>
-                          ) : (
-                            "—"
-                          )}
-                        </td>
+                            </td>
+                          </>
+                        )}
                         <td className="py-2 max-w-[140px]">
                           <span className="block truncate">
                             {row.mediazionePayload.mediatore || "—"}
@@ -351,36 +431,40 @@ export default function ImportMediazioni() {
                             )}
                           </span>
                         </td>
-                        <td className="py-2 max-w-[220px]">
-                          <span className="block truncate">
-                            {row.mediazionePayload.oggetto || "—"}
-                          </span>
-                        </td>
-                        <td className="py-2 max-w-[160px]">
-                          <span className="block truncate">
-                            {row.mediazionePayload.valore || "—"}
-                          </span>
-                        </td>
-                        <td className="py-2 max-w-[110px]">
-                          <span className="block truncate">
-                            {row.mediazionePayload.competenza || "—"}
-                          </span>
-                        </td>
-                        <td className="py-2 max-w-[130px]">
-                          <span className="block truncate">
-                            {row.mediazionePayload.modalita_mediazione || "—"}
-                          </span>
-                        </td>
-                        <td className="py-2 max-w-[220px]">
-                          <span className="block truncate">
-                            {row.mediazionePayload.modalita_convocazione || "—"}
-                          </span>
-                        </td>
-                        <td className="py-2 max-w-[220px]">
-                          <span className="block truncate">
-                            {row.mediazionePayload.motivazione_deposito || "—"}
-                          </span>
-                        </td>
+                        {detectedFormat !== "check" && (
+                          <>
+                            <td className="py-2 max-w-[220px]">
+                              <span className="block truncate">
+                                {row.mediazionePayload.oggetto || "—"}
+                              </span>
+                            </td>
+                            <td className="py-2 max-w-[160px]">
+                              <span className="block truncate">
+                                {row.mediazionePayload.valore || "—"}
+                              </span>
+                            </td>
+                            <td className="py-2 max-w-[110px]">
+                              <span className="block truncate">
+                                {row.mediazionePayload.competenza || "—"}
+                              </span>
+                            </td>
+                            <td className="py-2 max-w-[130px]">
+                              <span className="block truncate">
+                                {row.mediazionePayload.modalita_mediazione || "—"}
+                              </span>
+                            </td>
+                            <td className="py-2 max-w-[220px]">
+                              <span className="block truncate">
+                                {row.mediazionePayload.modalita_convocazione || "—"}
+                              </span>
+                            </td>
+                            <td className="py-2 max-w-[220px]">
+                              <span className="block truncate">
+                                {row.mediazionePayload.motivazione_deposito || "—"}
+                              </span>
+                            </td>
+                          </>
+                        )}
                         <td className="py-2">
                           <div className="flex flex-col gap-1">
                             {linkIstanza && isUrl(linkIstanza) ? (
@@ -403,7 +487,31 @@ export default function ImportMediazioni() {
                                 Cartella <ExternalLink className="w-3 h-3" />
                               </a>
                             ) : null}
-                            {!isUrl(linkIstanza) && !isUrl(linkCartella) && "—"}
+                            {linkAdesione && isUrl(linkAdesione) ? (
+                              <a
+                                href={linkAdesione}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="link link-primary text-xs inline-flex items-center gap-0.5"
+                              >
+                                Adesione <ExternalLink className="w-3 h-3" />
+                              </a>
+                            ) : null}
+                            {linkChiusura && isUrl(linkChiusura) ? (
+                              <a
+                                href={linkChiusura}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="link link-primary text-xs inline-flex items-center gap-0.5"
+                              >
+                                Chiusura <ExternalLink className="w-3 h-3" />
+                              </a>
+                            ) : null}
+                            {!isUrl(linkIstanza) &&
+                              !isUrl(linkCartella) &&
+                              !isUrl(linkAdesione) &&
+                              !isUrl(linkChiusura) &&
+                              "—"}
                           </div>
                         </td>
                       </tr>
@@ -422,7 +530,10 @@ export default function ImportMediazioni() {
                   <form onSubmit={handleSubmit} className="flex flex-wrap gap-3">
                     <button
                       type="button"
-                      onClick={() => setParsedRows([])}
+                      onClick={() => {
+                        setParsedRows([]);
+                        setDetectedFormat(null);
+                      }}
                       disabled={isImporting}
                       className="btn btn-ghost btn-sm"
                     >
@@ -451,7 +562,10 @@ export default function ImportMediazioni() {
                   <>
                     <button
                       type="button"
-                      onClick={() => setParsedRows([])}
+                      onClick={() => {
+                        setParsedRows([]);
+                        setDetectedFormat(null);
+                      }}
                       className="btn btn-ghost btn-sm"
                     >
                       Importa altro file

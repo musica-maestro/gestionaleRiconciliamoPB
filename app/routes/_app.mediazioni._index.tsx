@@ -257,7 +257,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
       ? pb
           .collection("users")
           .getFullList({
-            filter: 'ruolo_corrente = "mediatore" || ruoli ?~ "mediatore"',
             fields: "id,name,email,ruolo_corrente,stato",
             sort: "name",
             ...noCancel,
@@ -999,7 +998,7 @@ export default function MediazioniList() {
             </div>
           )}
           {mediatori.length === 0 && (
-            <div className="alert alert-warning py-2 text-sm">Nessun utente con ruolo mediatore.</div>
+            <div className="alert alert-warning py-2 text-sm">Nessun utente disponibile.</div>
           )}
         </div>
       )}

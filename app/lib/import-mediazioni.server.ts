@@ -65,6 +65,38 @@ function isUrlLike(s: string): boolean {
   return t.length > 0 && (t.startsWith("http://") || t.startsWith("https://"));
 }
 
+async function upsertDocumentoLink(
+  pb: PocketBase,
+  mediazioneId: string,
+  tipoId: string | undefined,
+  linkRaw: string | undefined,
+  descrizione: string
+): Promise<void> {
+  const link = (linkRaw || "").trim();
+  if (!tipoId || !isUrlLike(link)) return;
+  const existing = await pb
+    .collection("documenti")
+    .getFullList({
+      filter: pb.filter("mediazione = {:m} && tipo = {:t}", { m: mediazioneId, t: tipoId }),
+      limit: 1,
+      fields: "id,link_legacy",
+    })
+    .catch(() => []);
+  if (existing.length > 0) {
+    const doc = existing[0] as { id: string; link_legacy?: string };
+    if (doc.link_legacy !== link) {
+      await pb.collection("documenti").update(doc.id, { link_legacy: link });
+    }
+    return;
+  }
+  await pb.collection("documenti").create({
+    mediazione: mediazioneId,
+    tipo: tipoId,
+    descrizione,
+    link_legacy: link,
+  });
+}
+
 /** Build data_programmazione UTC from date (qualsiasi formato supportato da parseDateToISO) e ora (HH:MM o H.MM) in Europe/Rome. */
 function buildDataProgrammazioneUTC(dateStr: string, timeStr: string): string | undefined {
   const dateNorm = parseDateToISO(dateStr);
@@ -214,7 +246,12 @@ export async function importRows(
     if (t.nome) tipoByName[t.nome] = t.id;
   }
   const tipoCartella = tipoByName["Cartella"];
-  const tipoRichiesta = tipoByName["Richiesta di Mediazione"];
+  const tipoRichiesta = tipoByName["Richiesta di Mediazione"] || tipoByName["Istanza"];
+  const tipoAdesione = tipoByName["Adesione Chiamato"];
+  const tipoChiusura =
+    tipoByName["Verbale finale"] ||
+    tipoByName["Verbale Definitivo"] ||
+    tipoByName["Verbale"];
 
   for (const row of rows) {
     try {
@@ -223,21 +260,54 @@ export async function importRows(
         row.mediazionePayload.mediatore && userNameToId[row.mediazionePayload.mediatore]
           ? userNameToId[row.mediazionePayload.mediatore]
           : undefined;
+      const isCheck = row.sourceFormat === "check";
       const stato = mediatoreId ? "assegnata" : "registrata";
 
       const mediazioneData: Record<string, unknown> = {
         rgm: row.mediazionePayload.rgm || undefined,
-        oggetto: row.mediazionePayload.oggetto || undefined,
-        valore: row.mediazionePayload.valore || undefined,
-        competenza: row.mediazionePayload.competenza || undefined,
-        modalita_mediazione: row.mediazionePayload.modalita_mediazione || undefined,
-        motivazione_deposito: row.mediazionePayload.motivazione_deposito || undefined,
-        modalita_convocazione: row.mediazionePayload.modalita_convocazione || undefined,
-        nota: row.mediazionePayload.nota || undefined,
-        data_deposito: row.mediazionePayload.data_deposito || undefined,
-        data_protocollo: row.mediazionePayload.data_protocollo || undefined,
-        stato,
-        ...(mediatoreId ? { mediatore: mediatoreId } : { mediatore: "" }),
+        ...(row.mediazionePayload.oggetto
+          ? { oggetto: row.mediazionePayload.oggetto }
+          : {}),
+        ...(row.mediazionePayload.valore
+          ? { valore: row.mediazionePayload.valore }
+          : {}),
+        ...(row.mediazionePayload.competenza
+          ? { competenza: row.mediazionePayload.competenza }
+          : {}),
+        ...(row.mediazionePayload.modalita_mediazione
+          ? { modalita_mediazione: row.mediazionePayload.modalita_mediazione }
+          : {}),
+        ...(row.mediazionePayload.motivazione_deposito
+          ? { motivazione_deposito: row.mediazionePayload.motivazione_deposito }
+          : {}),
+        ...(row.mediazionePayload.modalita_convocazione
+          ? { modalita_convocazione: row.mediazionePayload.modalita_convocazione }
+          : {}),
+        ...(row.mediazionePayload.nota ? { nota: row.mediazionePayload.nota } : {}),
+        ...(row.mediazionePayload.data_deposito
+          ? { data_deposito: row.mediazionePayload.data_deposito }
+          : {}),
+        ...(row.mediazionePayload.data_protocollo
+          ? { data_protocollo: row.mediazionePayload.data_protocollo }
+          : {}),
+        ...(row.mediazionePayload.esito_finale
+          ? { esito_finale: row.mediazionePayload.esito_finale }
+          : {}),
+        ...(row.mediazionePayload.data_chiusura
+          ? { data_chiusura: row.mediazionePayload.data_chiusura }
+          : {}),
+        ...(row.mediazionePayload.trasmessa_set
+          ? { trasmessa: Boolean(row.mediazionePayload.trasmessa) }
+          : {}),
+        ...(isUrlLike(row.mediazionePayload.link_adesione || "")
+          ? { adesione: true }
+          : {}),
+        // Check: non azzerare mediatore se non risolto; Tracciato: comportamento precedente
+        ...(mediatoreId
+          ? { mediatore: mediatoreId, stato }
+          : isCheck
+            ? {}
+            : { mediatore: "", stato }),
       };
 
       let mediazioneId!: string;
@@ -257,6 +327,9 @@ export async function importRows(
         }
       }
       if (!isUpdate) {
+        if (!mediazioneData.stato) {
+          mediazioneData.stato = mediatoreId ? "assegnata" : "registrata";
+        }
         const created = await pb.collection("mediazioni").create(mediazioneData);
         mediazioneId = created.id;
 
@@ -313,55 +386,11 @@ export async function importRows(
         }
       }
 
-      // Documenti: upsert link istanza and cartella (find by mediazione+tipo, update or create)
-      const linkIstanza = (row.mediazionePayload.link_istanza || "").trim();
-      const linkCartella = (row.mediazionePayload.link_cartella || "").trim();
-      if (tipoRichiesta && isUrlLike(linkIstanza)) {
-        const existingIstanzaDoc = await pb
-          .collection("documenti")
-          .getFullList({
-            filter: pb.filter("mediazione = {:m} && tipo = {:t}", { m: mediazioneId, t: tipoRichiesta }),
-            limit: 1,
-            fields: "id,link_legacy",
-          })
-          .catch(() => []);
-        if (existingIstanzaDoc.length > 0) {
-          const doc = existingIstanzaDoc[0] as { id: string; link_legacy?: string };
-          if (doc.link_legacy !== linkIstanza) {
-            await pb.collection("documenti").update(doc.id, { link_legacy: linkIstanza });
-          }
-        } else {
-          await pb.collection("documenti").create({
-            mediazione: mediazioneId,
-            tipo: tipoRichiesta,
-            descrizione: "Richiesta di mediazione (import)",
-            link_legacy: linkIstanza,
-          });
-        }
-      }
-      if (tipoCartella && isUrlLike(linkCartella)) {
-        const existingCartellaDoc = await pb
-          .collection("documenti")
-          .getFullList({
-            filter: pb.filter("mediazione = {:m} && tipo = {:t}", { m: mediazioneId, t: tipoCartella }),
-            limit: 1,
-            fields: "id,link_legacy",
-          })
-          .catch(() => []);
-        if (existingCartellaDoc.length > 0) {
-          const doc = existingCartellaDoc[0] as { id: string; link_legacy?: string };
-          if (doc.link_legacy !== linkCartella) {
-            await pb.collection("documenti").update(doc.id, { link_legacy: linkCartella });
-          }
-        } else {
-          await pb.collection("documenti").create({
-            mediazione: mediazioneId,
-            tipo: tipoCartella,
-            descrizione: "Cartella (import)",
-            link_legacy: linkCartella,
-          });
-        }
-      }
+      // Documenti: upsert link (istanza, cartella, adesione, chiusura)
+      await upsertDocumentoLink(pb, mediazioneId, tipoRichiesta, row.mediazionePayload.link_istanza, "Richiesta di mediazione (import)");
+      await upsertDocumentoLink(pb, mediazioneId, tipoCartella, row.mediazionePayload.link_cartella, "Cartella (import)");
+      await upsertDocumentoLink(pb, mediazioneId, tipoAdesione, row.mediazionePayload.link_adesione, "Adesione chiamato (import)");
+      await upsertDocumentoLink(pb, mediazioneId, tipoChiusura, row.mediazionePayload.link_documento_chiusura, "Documento chiusura (import)");
 
       // Incontro: upsert — find the first incontro for this mediazione; update data_programmazione
       // if changed, create if none exists
