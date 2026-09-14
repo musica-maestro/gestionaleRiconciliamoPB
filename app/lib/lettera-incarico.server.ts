@@ -161,6 +161,34 @@ async function findOrCreateTipoId(pb: PocketBase, nome: string): Promise<string>
   return created.id;
 }
 
+/**
+ * Ensure the "Lettera incarico mediatore" model exists (active + file).
+ * Used to block assignment when the template is missing.
+ */
+export async function ensureLetteraIncaricoModello(
+  pb: PocketBase,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const active = await pb.collection("modelli_documenti").getList(1, 1, {
+    filter: `nome = "${MODELLO_LETTERA_INCARICO_NOME.replace(/"/g, '\\"')}" && attivo = true`,
+    sort: "-updated",
+  });
+  let modello = active.items[0] as { id: string; file?: string } | undefined;
+  if (!modello) {
+    const any = await pb.collection("modelli_documenti").getList(1, 1, {
+      filter: `nome = "${MODELLO_LETTERA_INCARICO_NOME.replace(/"/g, '\\"')}"`,
+      sort: "-updated",
+    });
+    modello = any.items[0] as { id: string; file?: string } | undefined;
+  }
+  if (!modello?.file) {
+    return {
+      ok: false,
+      error: `Modello "${MODELLO_LETTERA_INCARICO_NOME}" mancante o senza file. Caricalo in Impostazioni → Modelli prima di assegnare.`,
+    };
+  }
+  return { ok: true };
+}
+
 async function markLettereObsolete(
   pb: PocketBase,
   mediazioneId: string,

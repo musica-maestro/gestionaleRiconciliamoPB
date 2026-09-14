@@ -7,7 +7,7 @@ import {
   useSearchParams,
 } from "@remix-run/react";
 import { useState, useEffect, useRef, type ReactNode } from "react";
-import { AlertTriangle, Check, Copy, Mail, Pencil, Plus, Trash2, UserPlus, X } from "lucide-react";
+import { AlertTriangle, Check, Copy, FileText, Mail, MoreVertical, Pencil, Plus, Trash2, UserPlus, X } from "lucide-react";
 import { json, redirect, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
 import type { MetaFunction } from "@remix-run/node";
 import { getCurrentRole, requireUser } from "~/lib/auth.server";
@@ -16,7 +16,11 @@ import { AddParteDialog } from "~/components/add-parte-dialog";
 import { AddAvvocatoDialog } from "~/components/add-avvocato-dialog";
 import { RichTextEditor } from "~/components/rich-text-editor";
 import { ESITO_FINALE_FORM_OPTIONS, normalizeEsitoFinale, ESITO_RACCOMANDATA_VALUES, joinEsitoRaccomandata, splitEsitoRaccomandata } from "~/lib/esito-finale";
-import { createLetteraIncaricoForMediazione } from "~/lib/lettera-incarico.server";
+import { isCompetenzaAttiva, resolveCompetenzaNome } from "~/lib/competenza";
+import {
+  createLetteraIncaricoForMediazione,
+  ensureLetteraIncaricoModello,
+} from "~/lib/lettera-incarico.server";
 
 // Converts a "YYYY-MM-DDTHH:MM" string (interpreted as Europe/Rome local time) to a
 // PocketBase-compatible UTC string "YYYY-MM-DD HH:MM:SS.000Z".
@@ -91,7 +95,14 @@ export async function action({ request, params }: ActionFunctionArgs) {
     const rgm = String(formData.get("rgm") ?? "").trim() || undefined;
     const oggetto = String(formData.get("oggetto") ?? "").trim() || undefined;
     const valore = String(formData.get("valore") ?? "").trim() || undefined;
-    const competenza = String(formData.get("competenza") ?? "").trim() || undefined;
+    const competenzaRaw = String(formData.get("competenza") ?? "").trim();
+    const competenzeOpzioni = await pb
+      .collection("competenza_opzioni")
+      .getFullList<{ nome: string; attivo?: boolean }>({ filter: "attivo = true" })
+      .catch(() => [] as { nome: string; attivo?: boolean }[]);
+    const competenza = competenzaRaw
+      ? resolveCompetenzaNome(competenzaRaw, competenzeOpzioni)
+      : undefined;
     const data_protocollo = formData.get("data_protocollo")
       ? String(formData.get("data_protocollo"))
       : undefined;
@@ -143,6 +154,16 @@ export async function action({ request, params }: ActionFunctionArgs) {
       mediatoreChanged = mediatore !== prevMediatore;
     }
 
+    if (mediatoreChanged && mediatore) {
+      const modelloOk = await ensureLetteraIncaricoModello(pb);
+      if (!modelloOk.ok) {
+        return json(
+          { toast: "error" as const, mediazioneId: id, message: modelloOk.error },
+          { status: 400 },
+        );
+      }
+    }
+
     try {
       await pb.collection("mediazioni").update(id, updateData);
       if (mediatoreChanged && mediatore) {
@@ -151,9 +172,9 @@ export async function action({ request, params }: ActionFunctionArgs) {
         });
         if (!letter.ok) {
           return json({
-            toast: "saved" as const,
+            toast: "error" as const,
             mediazioneId: id,
-            message: `Salvata, ma lettera: ${letter.error}`,
+            message: `Mediazione aggiornata, ma lettera di incarico non creata: ${letter.error}`,
           });
         }
       }
@@ -498,6 +519,39 @@ export async function action({ request, params }: ActionFunctionArgs) {
       deleted_by: user.id,
     });
     return redirect("/mediazioni");
+  } else if (intent === "create_lettera_incarico") {
+    if (role !== "admin" && role !== "manager") {
+      throw new Response("Forbidden", { status: 403 });
+    }
+    const modelloOk = await ensureLetteraIncaricoModello(pb);
+    if (!modelloOk.ok) {
+      return json(
+        { toast: "error" as const, mediazioneId: id, message: modelloOk.error },
+        { status: 400 },
+      );
+    }
+    if (!mediatoreId) {
+      return json(
+        {
+          toast: "error" as const,
+          mediazioneId: id,
+          message: "Assegna prima un mediatore per creare la lettera di incarico.",
+        },
+        { status: 400 },
+      );
+    }
+    const letter = await createLetteraIncaricoForMediazione(pb, id);
+    if (!letter.ok) {
+      return json(
+        { toast: "error" as const, mediazioneId: id, message: letter.error },
+        { status: 422 },
+      );
+    }
+    return json({
+      toast: "saved" as const,
+      mediazioneId: id,
+      message: "Lettera di incarico creata e allegata nei documenti.",
+    });
   }
   return redirect(`/mediazioni/${id}`);
 }
@@ -840,7 +894,7 @@ const TABS = [
 ] as const;
 
 type MediazioneUpdateActionData =
-  | { toast: "saved"; mediazioneId: string }
+  | { toast: "saved"; mediazioneId: string; message?: string }
   | { toast: "error"; mediazioneId: string; message: string };
 
 // ─── Parte Card ───────────────────────────────────────────────────────────────
@@ -2379,9 +2433,7 @@ export default function MediazioneDetail() {
   const competenzaNonAttiva = (() => {
     const value = (mediazione.competenza ?? "").trim();
     if (!value) return false;
-    return !competenzaOpzioni.some(
-      (o) => o.trim().toLowerCase() === value.toLowerCase()
-    );
+    return !isCompetenzaAttiva(value, competenzaOpzioni);
   })();
 
   const isSavingMediazione =
@@ -2391,7 +2443,10 @@ export default function MediazioneDetail() {
     if (!actionData?.toast || actionData.mediazioneId !== mediazione.id) return;
     if (actionData.toast === "saved") {
       setEditMode(false);
-      setSaveToast({ kind: "saved" });
+      setSaveToast({
+        kind: "saved",
+        detail: "message" in actionData ? actionData.message : undefined,
+      });
       return;
     }
     if (actionData.toast === "error") {
@@ -2482,11 +2537,11 @@ export default function MediazioneDetail() {
             }`}
           >
             <p className="font-semibold">
-              {saveToast.kind === "saved" ? "Modifiche salvate" : "Salvataggio non riuscito"}
+              {saveToast.kind === "saved" ? "Operazione completata" : "Operazione non riuscita"}
             </p>
             <p className="mt-1 opacity-90">
               {saveToast.kind === "saved"
-                ? "I dati della mediazione sono stati aggiornati."
+                ? saveToast.detail || "I dati della mediazione sono stati aggiornati."
                 : saveToast.detail || "Non è stato possibile salvare. Riprova."}
             </p>
           </div>
@@ -2588,6 +2643,37 @@ export default function MediazioneDetail() {
                 >
                   <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>
+              )}
+              {canDelete && (
+                <details className="dropdown dropdown-end">
+                  <summary
+                    className="btn btn-ghost btn-xs btn-square min-h-0 h-7 w-7 p-0 list-none"
+                    title="Altre azioni"
+                    aria-label="Altre azioni"
+                  >
+                    <MoreVertical className="h-4 w-4" aria-hidden="true" />
+                  </summary>
+                  <ul className="dropdown-content menu z-30 mt-1 w-56 rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
+                    <li>
+                      <Form method="post" className="p-0">
+                        <input type="hidden" name="_action" value="create_lettera_incarico" />
+                        <button
+                          type="submit"
+                          className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                          disabled={!mediazione.mediatore_id}
+                          title={
+                            mediazione.mediatore_id
+                              ? "Genera e allega la lettera di incarico"
+                              : "Assegna prima un mediatore"
+                          }
+                        >
+                          <FileText className="h-4 w-4 shrink-0" aria-hidden="true" />
+                          Crea lettera di incarico
+                        </button>
+                      </Form>
+                    </li>
+                  </ul>
+                </details>
               )}
             </div>
           </div>

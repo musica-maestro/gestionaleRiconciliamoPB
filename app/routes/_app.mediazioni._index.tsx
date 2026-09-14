@@ -7,7 +7,7 @@ export const meta: MetaFunction = () => [{ title: "Mediazioni" }];
 import { getCurrentRole, requireUser } from "~/lib/auth.server";
 import { createPB } from "~/lib/pocketbase.server";
 import { callRiconciliamoApi } from "~/lib/riconciliamo-api.server";
-import { createLettereIncaricoForMediazioni } from "~/lib/lettera-incarico.server";
+import { createLettereIncaricoForMediazioni, ensureLetteraIncaricoModello } from "~/lib/lettera-incarico.server";
 import {
   FilterableTable,
   FilterTextInput,
@@ -19,6 +19,7 @@ import {
 } from "~/components/data-table";
 import { ExportMediazioniDialog } from "~/components/export-mediazioni-dialog";
 import { ExportFlussoNotificheDialog } from "~/components/export-flusso-notifiche-dialog";
+import { competenzeAttiveKeySet, isCompetenzaAttiva } from "~/lib/competenza";
 import { ESITO_FINALE_FILTER_OPTIONS } from "~/lib/esito-finale";
 import { AlertTriangle, Eye, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Download } from "lucide-react";
 const PER_PAGE_OPTIONS = [10, 25, 50, 100] as const;
@@ -116,6 +117,13 @@ export async function action({ request }: ActionFunctionArgs) {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+
+  const { pb } = await createPB(request);
+  const modelloOk = await ensureLetteraIncaricoModello(pb);
+  if (!modelloOk.ok) {
+    return json({ error: modelloOk.error }, 400);
+  }
+
   const res = await callRiconciliamoApi(request, "/api/riconciliamo/mediazioni/assegna", {
     method: "POST",
     body: JSON.stringify({ ids, mode, mediatoreIds }),
@@ -131,7 +139,6 @@ export async function action({ request }: ActionFunctionArgs) {
     (data as { assignedIds: string[] }).assignedIds.length > 0
       ? (data as { assignedIds: string[] }).assignedIds
       : ids;
-  const { pb } = await createPB(request);
   const letterResult = await createLettereIncaricoForMediazioni(pb, assignedIds);
   return json({
     ok: true,
@@ -287,17 +294,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
       .catch(() => 0),
   ]);
 
-  const competenzeAttive = new Set(
-    (competenzaList as { nome?: string }[])
-      .map((o) => String(o.nome ?? "").trim().toLowerCase())
-      .filter(Boolean)
+  const competenzeAttive = competenzeAttiveKeySet(
+    competenzaList as { nome?: string }[],
   );
 
   const mediazioni = result.items.map((m) => {
     const competenzaRaw = String(m.competenza ?? "").trim();
     const competenza = competenzaRaw || "—";
     const competenzaNonAttiva =
-      Boolean(competenzaRaw) && !competenzeAttive.has(competenzaRaw.toLowerCase());
+      Boolean(competenzaRaw) && !isCompetenzaAttiva(competenzaRaw, competenzeAttive);
     return {
     id: String(m.id),
     rgm: String(m.rgm ?? "—"),

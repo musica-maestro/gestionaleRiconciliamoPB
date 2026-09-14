@@ -3,6 +3,7 @@
  * Parses rows and creates mediazioni, soggetti, avvocati, partecipazioni in PocketBase.
  */
 import type PocketBase from "pocketbase";
+import { resolveCompetenzaNome } from "~/lib/competenza";
 import { parseDateToISO } from "~/lib/import-mediazioni-mapping";
 import type { ImportRow } from "~/lib/import-mediazioni-mapping";
 
@@ -253,6 +254,11 @@ export async function importRows(
     tipoByName["Verbale Definitivo"] ||
     tipoByName["Verbale"];
 
+  const competenzeOpzioni = await pb
+    .collection("competenza_opzioni")
+    .getFullList<{ nome: string; attivo?: boolean }>({ filter: "attivo = true" })
+    .catch(() => [] as { nome: string; attivo?: boolean }[]);
+
   for (const row of rows) {
     try {
       // Only set mediatore when Excel has a resolvable name — never default to importer.
@@ -272,7 +278,12 @@ export async function importRows(
           ? { valore: row.mediazionePayload.valore }
           : {}),
         ...(row.mediazionePayload.competenza
-          ? { competenza: row.mediazionePayload.competenza }
+          ? {
+              competenza: resolveCompetenzaNome(
+                row.mediazionePayload.competenza,
+                competenzeOpzioni,
+              ),
+            }
           : {}),
         ...(row.mediazionePayload.modalita_mediazione
           ? { modalita_mediazione: row.mediazionePayload.modalita_mediazione }

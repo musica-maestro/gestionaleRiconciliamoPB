@@ -1,6 +1,10 @@
 import JSZip from "jszip";
 import type PocketBase from "pocketbase";
 import * as XLSX from "xlsx";
+import {
+  competenzeAttiveKeySet,
+  isCompetenzaAttiva,
+} from "~/lib/competenza";
 import { fillWordMergeFields } from "~/lib/docx-merge-fields.server";
 import { convertDocxToPdf, mergePdfs } from "~/lib/gotenberg.server";
 import {
@@ -608,9 +612,8 @@ export async function buildFlussoNotificheZip(
     .collection("competenza_opzioni")
     .getFullList<{ nome: string; attivo?: boolean }>({ filter: "attivo = true" })
     .catch(() => [] as { nome: string; attivo?: boolean }[]);
-  const competenzeSet = new Set(
-    competenzeAttive.map((c) => String(c.nome ?? "").trim().toLowerCase()).filter(Boolean),
-  );
+  // Keys are lowercased (ROMA → roma) so they match active DB options case-insensitively.
+  const competenzeSet = competenzeAttiveKeySet(competenzeAttive);
 
   const tipiIstanzaResp = await pb
     .collection("documenti_tipi")
@@ -642,8 +645,7 @@ export async function buildFlussoNotificheZip(
       const label = rgm || mediazioneId;
       const oggetto = String(mediazione.oggetto ?? "").trim();
       const competenza = String(mediazione.competenza ?? "").trim();
-      const competenzaAttiva =
-        competenza.length > 0 && competenzeSet.has(competenza.toLowerCase());
+      const competenzaAttiva = isCompetenzaAttiva(competenza, competenzeSet);
       const codiceUnivoco = String(mediazione.codice_univoco_cliente ?? "").trim();
 
       const partecipazioni = (await pb.collection("partecipazioni").getFullList({
