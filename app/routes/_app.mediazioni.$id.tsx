@@ -15,7 +15,7 @@ import { createPB } from "~/lib/pocketbase.server";
 import { AddParteDialog } from "~/components/add-parte-dialog";
 import { AddAvvocatoDialog } from "~/components/add-avvocato-dialog";
 import { RichTextEditor } from "~/components/rich-text-editor";
-import { ESITO_FINALE_FORM_OPTIONS, normalizeEsitoFinale, STATO_RACCOMANDATA_VALUES } from "~/lib/esito-finale";
+import { ESITO_FINALE_FORM_OPTIONS, normalizeEsitoFinale, ESITO_RACCOMANDATA_VALUES, joinEsitoRaccomandata, splitEsitoRaccomandata } from "~/lib/esito-finale";
 import { createLetteraIncaricoForMediazione } from "~/lib/lettera-incarico.server";
 
 // Converts a "YYYY-MM-DDTHH:MM" string (interpreted as Europe/Rome local time) to a
@@ -347,14 +347,17 @@ export async function action({ request, params }: ActionFunctionArgs) {
   } else if (intent === "add_convocazione") {
     const partecipazione_id = formData.get("partecipazione_id");
     if (!partecipazione_id) return redirect(`/mediazioni/${id}?tab=convocazioni`);
+    const { stato_raccomandata, motivo_raccomandata } = splitEsitoRaccomandata(
+      String(formData.get("esito_raccomandata") ?? "")
+    );
     await pb.collection("convocazioni").create({
       partecipazione: partecipazione_id,
       data_invio: formData.get("data_invio") ? String(formData.get("data_invio")) : undefined,
       tipologia: String(formData.get("tipologia") ?? "PEC"),
       numero_raccomandata: String(formData.get("numero_raccomandata") ?? "").trim() || undefined,
       link_tracciamento_poste: String(formData.get("link_tracciamento_poste") ?? "").trim() || undefined,
-      stato_raccomandata: String(formData.get("stato_raccomandata") ?? "").trim() || undefined,
-      motivo_raccomandata: String(formData.get("motivo_raccomandata") ?? "").trim() || undefined,
+      stato_raccomandata: stato_raccomandata || undefined,
+      motivo_raccomandata: motivo_raccomandata || undefined,
       nota: String(formData.get("nota") ?? "").trim() || undefined,
     });
     // Convocazione = notifica alle parti → passa in Aperte
@@ -462,13 +465,16 @@ export async function action({ request, params }: ActionFunctionArgs) {
   } else if (intent === "update_convocazione") {
     const convocazione_id = String(formData.get("convocazione_id") ?? "");
     if (!convocazione_id) return redirect(`/mediazioni/${id}?tab=convocazioni`);
+    const { stato_raccomandata, motivo_raccomandata } = splitEsitoRaccomandata(
+      String(formData.get("esito_raccomandata") ?? "")
+    );
     await pb.collection("convocazioni").update(convocazione_id, {
       data_invio: formData.get("data_invio") ? String(formData.get("data_invio")) : undefined,
       tipologia: String(formData.get("tipologia") ?? "PEC"),
       numero_raccomandata: String(formData.get("numero_raccomandata") ?? "").trim() || null,
       link_tracciamento_poste: String(formData.get("link_tracciamento_poste") ?? "").trim() || null,
-      stato_raccomandata: String(formData.get("stato_raccomandata") ?? "").trim() || null,
-      motivo_raccomandata: String(formData.get("motivo_raccomandata") ?? "").trim() || null,
+      stato_raccomandata: stato_raccomandata || null,
+      motivo_raccomandata: motivo_raccomandata || null,
       nota: String(formData.get("nota") ?? "").trim() || undefined,
     });
     return redirect(`/mediazioni/${id}?tab=convocazioni`);
@@ -1812,12 +1818,10 @@ function AddConvocazioneDialog({
   motivoRaccomandataOpzioni: string[];
 }) {
   const [tipologia, setTipologia] = useState("PEC");
-  const [statoRaccomandata, setStatoRaccomandata] = useState("");
 
   useEffect(() => {
     if (!isOpen) return;
     setTipologia("PEC");
-    setStatoRaccomandata("");
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
@@ -1826,7 +1830,6 @@ function AddConvocazioneDialog({
   if (!isOpen) return null;
 
   const isRaccomandata = tipologia === "Raccomandata";
-  const showMotivo = isRaccomandata && statoRaccomandata === "Non consegnabile";
 
   return (
     <div
@@ -1872,10 +1875,7 @@ function AddConvocazioneDialog({
                 <select
                   name="tipologia"
                   value={tipologia}
-                  onChange={(e) => {
-                    setTipologia(e.target.value);
-                    if (e.target.value !== "Raccomandata") setStatoRaccomandata("");
-                  }}
+                  onChange={(e) => setTipologia(e.target.value)}
                   className={EDIT_INPUT}
                 >
                   <option value="PEC">PEC</option>
@@ -1891,17 +1891,17 @@ function AddConvocazioneDialog({
                     <input type="text" name="numero_raccomandata" className={EDIT_INPUT} placeholder="es. 12345678901" />
                   </div>
                   <div>
-                    <label className={EDIT_LABEL}>Stato raccomandata</label>
-                    <select
-                      name="stato_raccomandata"
-                      value={statoRaccomandata}
-                      onChange={(e) => setStatoRaccomandata(e.target.value)}
-                      className={EDIT_INPUT}
-                    >
+                    <label className={EDIT_LABEL}>Esito raccomandata</label>
+                    <select name="esito_raccomandata" className={EDIT_INPUT} defaultValue="">
                       <option value="">— Seleziona —</option>
-                      {STATO_RACCOMANDATA_VALUES.map((s) => (
+                      {ESITO_RACCOMANDATA_VALUES.map((s) => (
                         <option key={s} value={s}>{s}</option>
                       ))}
+                      {motivoRaccomandataOpzioni
+                        .filter((m) => !(ESITO_RACCOMANDATA_VALUES as readonly string[]).includes(m))
+                        .map((m) => (
+                          <option key={m} value={m}>{m}</option>
+                        ))}
                     </select>
                   </div>
                 </div>
@@ -1909,22 +1909,6 @@ function AddConvocazioneDialog({
                   <label className={EDIT_LABEL}>Link tracciamento</label>
                   <input type="url" name="link_tracciamento_poste" className={EDIT_INPUT} placeholder="https://..." />
                 </div>
-                {showMotivo && (
-                  <div>
-                    <label className={EDIT_LABEL}>Motivo non consegnabile</label>
-                    <select name="motivo_raccomandata" className={EDIT_INPUT} defaultValue="">
-                      <option value="">— Seleziona motivo —</option>
-                      {motivoRaccomandataOpzioni.map((m) => (
-                        <option key={m} value={m}>{m}</option>
-                      ))}
-                    </select>
-                    {motivoRaccomandataOpzioni.length === 0 && (
-                      <p className="mt-1 text-xs text-amber-600">
-                        Nessun motivo in Impostazioni. Aggiungili in Admin → Impostazioni.
-                      </p>
-                    )}
-                  </div>
-                )}
               </>
             )}
             <div>
@@ -2108,12 +2092,10 @@ function EditConvocazioneDialog({
   motivoRaccomandataOpzioni: string[];
 }) {
   const [tipologia, setTipologia] = useState(convocazione?.tipologia ?? "PEC");
-  const [statoRaccomandata, setStatoRaccomandata] = useState(convocazione?.stato_raccomandata ?? "");
 
   useEffect(() => {
     if (!convocazione) return;
     setTipologia(convocazione.tipologia ?? "PEC");
-    setStatoRaccomandata(convocazione.stato_raccomandata ?? "");
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
@@ -2125,7 +2107,10 @@ function EditConvocazioneDialog({
     d ? new Date(d).toISOString().slice(0, 10) : "";
 
   const isRaccomandata = tipologia === "Raccomandata";
-  const showMotivo = isRaccomandata && statoRaccomandata === "Non consegnabile";
+  const esitoDefault = joinEsitoRaccomandata(
+    convocazione.stato_raccomandata,
+    convocazione.motivo_raccomandata
+  );
 
   return (
     <div
@@ -2158,10 +2143,7 @@ function EditConvocazioneDialog({
               <select
                 name="tipologia"
                 value={tipologia}
-                onChange={(e) => {
-                  setTipologia(e.target.value);
-                  if (e.target.value !== "Raccomandata") setStatoRaccomandata("");
-                }}
+                onChange={(e) => setTipologia(e.target.value)}
                 className={EDIT_INPUT}
               >
                 <option value="PEC">PEC</option>
@@ -2183,17 +2165,26 @@ function EditConvocazioneDialog({
                   />
                 </div>
                 <div>
-                  <label className={EDIT_LABEL}>Stato raccomandata</label>
+                  <label className={EDIT_LABEL}>Esito raccomandata</label>
                   <select
-                    name="stato_raccomandata"
-                    value={statoRaccomandata}
-                    onChange={(e) => setStatoRaccomandata(e.target.value)}
+                    name="esito_raccomandata"
                     className={EDIT_INPUT}
+                    defaultValue={esitoDefault}
                   >
                     <option value="">— Seleziona —</option>
-                    {STATO_RACCOMANDATA_VALUES.map((s) => (
+                    {ESITO_RACCOMANDATA_VALUES.map((s) => (
                       <option key={s} value={s}>{s}</option>
                     ))}
+                    {motivoRaccomandataOpzioni
+                      .filter((m) => !(ESITO_RACCOMANDATA_VALUES as readonly string[]).includes(m))
+                      .map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    {esitoDefault &&
+                      !(ESITO_RACCOMANDATA_VALUES as readonly string[]).includes(esitoDefault) &&
+                      !motivoRaccomandataOpzioni.includes(esitoDefault) && (
+                        <option value={esitoDefault}>{esitoDefault}</option>
+                      )}
                   </select>
                 </div>
               </div>
@@ -2207,27 +2198,6 @@ function EditConvocazioneDialog({
                   placeholder="https://..."
                 />
               </div>
-              {showMotivo && (
-                <div>
-                  <label className={EDIT_LABEL}>Motivo non consegnabile</label>
-                  <select
-                    name="motivo_raccomandata"
-                    className={EDIT_INPUT}
-                    defaultValue={convocazione.motivo_raccomandata ?? ""}
-                  >
-                    <option value="">— Seleziona motivo —</option>
-                    {motivoRaccomandataOpzioni.map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                    {convocazione.motivo_raccomandata &&
-                      !motivoRaccomandataOpzioni.includes(convocazione.motivo_raccomandata) && (
-                        <option value={convocazione.motivo_raccomandata}>
-                          {convocazione.motivo_raccomandata}
-                        </option>
-                      )}
-                  </select>
-                </div>
-              )}
             </>
           )}
           <div>
@@ -3231,8 +3201,9 @@ export default function MediazioneDetail() {
                         ? new Date(c.data_invio).toLocaleDateString("it-IT")
                         : "—"}{" "}
                       · {c.tipologia ?? "—"}
-                      {c.tipologia === "Raccomandata" && c.stato_raccomandata
-                        ? ` · ${c.stato_raccomandata}`
+                      {c.tipologia === "Raccomandata" &&
+                      joinEsitoRaccomandata(c.stato_raccomandata, c.motivo_raccomandata)
+                        ? ` · ${joinEsitoRaccomandata(c.stato_raccomandata, c.motivo_raccomandata)}`
                         : ""}
                     </p>
                     {c.tipologia === "Raccomandata" && c.numero_raccomandata && (
@@ -3252,9 +3223,6 @@ export default function MediazioneDetail() {
                           </>
                         ) : null}
                       </p>
-                    )}
-                    {c.stato_raccomandata === "Non consegnabile" && c.motivo_raccomandata && (
-                      <p className="text-red-600 mt-0.5">Motivo: {c.motivo_raccomandata}</p>
                     )}
                     {c.nota && <p className="text-slate-500 mt-0.5">{c.nota}</p>}
                   </div>

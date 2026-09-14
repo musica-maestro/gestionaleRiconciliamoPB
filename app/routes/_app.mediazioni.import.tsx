@@ -147,7 +147,8 @@ export default function ImportMediazioni() {
       nameLower.endsWith(".xlsm") ||
       file.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
       file.type === "application/vnd.ms-excel" ||
-      file.type === "application/vnd.ms-excel.sheet.macroEnabled.12";
+      file.type === "application/vnd.ms-excel.sheet.macroEnabled.12" ||
+      file.type === "application/vnd.ms-excel.sheet.macroenabled.12";
 
     if (!isExcel) {
       setParsedRows([]);
@@ -160,7 +161,8 @@ export default function ImportMediazioni() {
       try {
         const data = ev.target?.result;
         if (!data) return;
-        const workbook = XLSX.read(data, { type: "binary" });
+        // ArrayBuffer is more reliable than binary string for .xlsm
+        const workbook = XLSX.read(data, { type: "array", cellDates: false });
         const sheetNames = workbook.SheetNames;
         const mediazioniName =
           sheetNames.find((n) => n.trim().toLowerCase() === "mediazioni") ||
@@ -190,7 +192,7 @@ export default function ImportMediazioni() {
         setDetectedFormat(null);
       }
     };
-    reader.readAsBinaryString(file);
+    reader.readAsArrayBuffer(file);
     e.target.value = "";
   };
 
@@ -225,7 +227,7 @@ export default function ImportMediazioni() {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".xlsx,.xls,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/vnd.ms-excel.sheet.macroEnabled.12"
+          accept=".xlsx,.xls,.xlsm"
           onChange={onFileSelected}
           className="hidden"
         />

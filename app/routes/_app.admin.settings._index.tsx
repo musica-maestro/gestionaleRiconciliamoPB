@@ -858,7 +858,7 @@ export default function AdminSettingsIndex() {
             addAction="add_motivo_raccomandata"
             toggleAction="toggle_motivo_raccomandata"
             items={motivoRaccomandata}
-            nomePlaceholder="es. Destinatario sconosciuto, Compiuta giacenza"
+            nomePlaceholder="es. Destinatario irreperibile, Indirizzo inesatto"
             section="altro"
             icon={Mail}
           />
