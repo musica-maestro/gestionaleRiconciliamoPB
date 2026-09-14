@@ -48,6 +48,9 @@ const MATERIA_LABELS = [
 const FLUSSO_CSV_HEADERS =
   "id_lesive;RagioneSociale;CAP;Citta;Provincia;Stato;Indirizzo;CompletamentoIndirizzo;CompletamentoNominativo;NomeFile;CodiceFiscale;Telefono;sms;testoSms;code_mittente;code_mittente_return";
 
+/** Fixed Poste Speciale mittente code for Riconciliamo flusso export (same columns as Talento). */
+const FLUSSO_CODE_MITTENTE = "00025AYPRX";
+
 const MONTHS_IT = [
   "gennaio",
   "febbraio",
@@ -889,8 +892,8 @@ export async function buildFlussoNotificheZip(
         Telefono: "",
         sms: "",
         testoSms: "",
-        code_mittente: "",
-        code_mittente_return: "",
+        code_mittente: FLUSSO_CODE_MITTENTE,
+        code_mittente_return: FLUSSO_CODE_MITTENTE,
       });
 
       exported.push({
