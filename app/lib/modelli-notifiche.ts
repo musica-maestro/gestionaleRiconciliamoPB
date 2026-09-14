@@ -16,22 +16,22 @@ export const MODELLI_NOTIFICHE_FISSI = [
   {
     nome: MODELLO_CONVOCAZIONE_PF_ACCORDO,
     descrizione:
-      "Convocazione persona fisica quando la competenza è attiva (accordo tra organismi).",
+      "Convocazione persona fisica fuori competenza territoriale (accordo tra organismi).",
   },
   {
     nome: MODELLO_CONVOCAZIONE_PF_ART4,
     descrizione:
-      "Convocazione persona fisica quando la competenza non è attiva (art. 4 D.Lgs. 28/2010).",
+      "Convocazione persona fisica con competenza territoriale attiva (art. 4 D.Lgs. 28/2010).",
   },
   {
     nome: MODELLO_CONVOCAZIONE_PG_ACCORDO,
     descrizione:
-      "Convocazione persona giuridica quando la competenza è attiva (accordo tra organismi).",
+      "Convocazione persona giuridica fuori competenza territoriale (accordo tra organismi).",
   },
   {
     nome: MODELLO_CONVOCAZIONE_PG_ART4,
     descrizione:
-      "Convocazione persona giuridica quando la competenza non è attiva (art. 4 D.Lgs. 28/2010).",
+      "Convocazione persona giuridica con competenza territoriale attiva (art. 4 D.Lgs. 28/2010).",
   },
   {
     nome: MODELLO_MODULO_ADESIONE,

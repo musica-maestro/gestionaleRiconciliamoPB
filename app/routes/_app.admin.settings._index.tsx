@@ -620,7 +620,7 @@ export default function AdminSettingsIndex() {
               <h2 className="font-semibold text-base-content">Modelli notifiche (flusso)</h2>
               <p className="mt-0.5 text-sm text-base-content/65">
                 Convocazioni e modulo di adesione usati dall&apos;export Flusso su Da convocare.
-                Selezione automatica in base a persona fisica/giuridica e competenza attiva.
+                Selezione automatica: competenza territoriale attiva → art. 4; fuori lista → accordo organismi (PF/PG).
               </p>
             </div>
             <div className="p-5 space-y-4">

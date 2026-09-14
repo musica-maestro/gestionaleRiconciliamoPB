@@ -3,7 +3,7 @@ import type PocketBase from "pocketbase";
 import * as XLSX from "xlsx";
 import {
   competenzeAttiveKeySet,
-  isCompetenzaAttiva,
+  shouldUseAccordoOrganismiModello,
 } from "~/lib/competenza";
 import { fillWordMergeFields } from "~/lib/docx-merge-fields.server";
 import { convertDocxToPdf, mergePdfs } from "~/lib/gotenberg.server";
@@ -375,13 +375,17 @@ function materiaCheckboxes(oggetto: string): Record<string, string> {
 
 export function selectConvocazioneModelloNome(
   chiamatoTipo: string,
-  competenzaAttiva: boolean,
+  useAccordoOrganismi: boolean,
 ): string {
   const giuridica = chiamatoTipo === "Giuridica";
   if (giuridica) {
-    return competenzaAttiva ? MODELLO_CONVOCAZIONE_PG_ACCORDO : MODELLO_CONVOCAZIONE_PG_ART4;
+    return useAccordoOrganismi
+      ? MODELLO_CONVOCAZIONE_PG_ACCORDO
+      : MODELLO_CONVOCAZIONE_PG_ART4;
   }
-  return competenzaAttiva ? MODELLO_CONVOCAZIONE_PF_ACCORDO : MODELLO_CONVOCAZIONE_PF_ART4;
+  return useAccordoOrganismi
+    ? MODELLO_CONVOCAZIONE_PF_ACCORDO
+    : MODELLO_CONVOCAZIONE_PF_ART4;
 }
 
 function buildConvocazioneData(opts: {
@@ -648,7 +652,11 @@ export async function buildFlussoNotificheZip(
       const label = rgm || mediazioneId;
       const oggetto = String(mediazione.oggetto ?? "").trim();
       const competenza = String(mediazione.competenza ?? "").trim();
-      const competenzaAttiva = isCompetenzaAttiva(competenza, competenzeSet);
+      // Active territorialità → Art. 4 model; outside list → accordo organismi.
+      const useAccordoOrganismi = shouldUseAccordoOrganismiModello(
+        competenza,
+        competenzeSet,
+      );
       const codiceUnivoco = String(mediazione.codice_univoco_cliente ?? "").trim();
 
       const partecipazioni = (await pb.collection("partecipazioni").getFullList({
@@ -691,7 +699,7 @@ export async function buildFlussoNotificheZip(
 
       const modelloNome = selectConvocazioneModelloNome(
         String(chiamato.tipo ?? "Fisica"),
-        competenzaAttiva,
+        useAccordoOrganismi,
       );
       if (!modelliBuf[modelloNome]) rowErrors.push(`modello "${modelloNome}" non caricato`);
       if (!modelliBuf[MODELLO_MODULO_ADESIONE]) {

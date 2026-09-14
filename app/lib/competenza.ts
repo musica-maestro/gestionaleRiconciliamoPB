@@ -42,6 +42,19 @@ export function isCompetenzaAttiva(
   return set.has(key);
 }
 
+/**
+ * Whether the Flusso convocazione should use the "accordo organismi" model.
+ *
+ * Active territorial competence → Art. 4; outside active list → accordo.
+ */
+export function shouldUseAccordoOrganismiModello(
+  competenza: string | null | undefined,
+  competenzeAttiveKeys: Iterable<string> | Set<string>,
+): boolean {
+  // Active list = our territory → Art. 4; elsewhere (or empty) → accordo.
+  return !isCompetenzaAttiva(competenza, competenzeAttiveKeys);
+}
+
 /** Build a Set of normalized keys from competenza_opzioni records. */
 export function competenzeAttiveKeySet(
   options: Array<{ nome?: string | null }>,
