@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Link, useFetcher, useLoaderData } from "@remix-run/react";
 import { json, redirect, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
 import * as XLSX from "xlsx";
@@ -9,6 +9,25 @@ import { importRows } from "~/lib/import-mediazioni.server";
 import { Upload, FileSpreadsheet, Loader2, ExternalLink, UserCheck, UserPlus } from "lucide-react";
 
 export const meta = () => [{ title: "Importa mediazioni" }];
+
+/** Chunk size so the UI can show live progress during import. */
+const IMPORT_BATCH_SIZE = 5;
+
+type ImportProgress = {
+  running: boolean;
+  total: number;
+  done: number;
+  success: number;
+  errors: { index: number; error: string }[];
+  inFlight: number;
+  message?: string;
+};
+
+function chunkRows<T>(rows: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < rows.length; i += size) out.push(rows.slice(i, i + size));
+  return out;
+}
 
 export async function loader({ request }: LoaderFunctionArgs) {
   await requireUserAndRole(request, "admin", "manager");
@@ -131,10 +150,110 @@ export default function ImportMediazioni() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [parsedRows, setParsedRows] = useState<ImportRow[]>([]);
   const [detectedFormat, setDetectedFormat] = useState<"check" | "tracciato" | null>(null);
+  const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
   const fetcher = useFetcher<typeof action>();
 
-  const isImporting = fetcher.state === "submitting" || fetcher.state === "loading";
-  const actionData = fetcher.data;
+  const queueRef = useRef<ImportRow[][]>([]);
+  const statsRef = useRef({ total: 0, done: 0, success: 0, lastBatch: 0, errors: [] as { index: number; error: string }[] });
+  const phaseRef = useRef<"idle" | "sent" | "recv">("idle");
+
+  const isImporting = importProgress?.running === true;
+  const importDone = importProgress != null && !importProgress.running && importProgress.done > 0;
+  const remaining = importProgress
+    ? Math.max(0, importProgress.total - importProgress.done)
+    : 0;
+  const progressValue =
+    importProgress && importProgress.inFlight > 0
+      ? Math.min(importProgress.total, importProgress.done + importProgress.inFlight * 0.5)
+      : (importProgress?.done ?? 0);
+
+  function submitBatch(batch: ImportRow[]) {
+    statsRef.current.lastBatch = batch.length;
+    phaseRef.current = "sent";
+    setImportProgress((prev) =>
+      prev
+        ? { ...prev, running: true, inFlight: batch.length }
+        : {
+            running: true,
+            total: statsRef.current.total,
+            done: 0,
+            success: 0,
+            errors: [],
+            inFlight: batch.length,
+          }
+    );
+    fetcher.submit(
+      { rows: JSON.stringify(batch) },
+      { method: "post", action: "/mediazioni/import" }
+    );
+  }
+
+  useEffect(() => {
+    if (phaseRef.current === "sent" && fetcher.state !== "idle") {
+      phaseRef.current = "recv";
+    }
+    if (phaseRef.current !== "recv") return;
+    if (fetcher.state !== "idle") return;
+
+    const data = fetcher.data;
+    if (!data) return;
+
+    const stats = statsRef.current;
+    stats.done = Math.min(stats.total, stats.done + stats.lastBatch);
+
+    if ("error" in data && data.error && !("success" in data)) {
+      phaseRef.current = "idle";
+      queueRef.current = [];
+      const message = String(data.error);
+      setImportProgress({
+        running: false,
+        total: stats.total,
+        done: stats.done,
+        success: stats.success,
+        errors: [...stats.errors, { index: -1, error: message }],
+        inFlight: 0,
+        message,
+      });
+      return;
+    }
+
+    if ("success" in data) {
+      stats.success += Number(data.success) || 0;
+      const batchErrors =
+        "errors" in data && Array.isArray(data.errors)
+          ? (data.errors as { index: number; error: string }[])
+          : [];
+      stats.errors = [...stats.errors, ...batchErrors];
+    }
+
+    const next = queueRef.current.shift();
+    if (next) {
+      setImportProgress({
+        running: true,
+        total: stats.total,
+        done: stats.done,
+        success: stats.success,
+        errors: stats.errors,
+        inFlight: next.length,
+      });
+      submitBatch(next);
+      return;
+    }
+
+    phaseRef.current = "idle";
+    const message = `Import completato: ${stats.success} create/aggiornate${
+      stats.errors.length > 0 ? `, ${stats.errors.length} errori` : ""
+    }.`;
+    setImportProgress({
+      running: false,
+      total: stats.total,
+      done: stats.done,
+      success: stats.success,
+      errors: stats.errors,
+      inFlight: 0,
+      message,
+    });
+  }, [fetcher.state, fetcher.data]);
 
   const onFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -153,6 +272,7 @@ export default function ImportMediazioni() {
     if (!isExcel) {
       setParsedRows([]);
       setDetectedFormat(null);
+      setImportProgress(null);
       return;
     }
 
@@ -187,9 +307,13 @@ export default function ImportMediazioni() {
         });
         setParsedRows(rows);
         setDetectedFormat(rows[0]?.sourceFormat === "check" ? "check" : "tracciato");
+        setImportProgress(null);
+        phaseRef.current = "idle";
+        queueRef.current = [];
       } catch {
         setParsedRows([]);
         setDetectedFormat(null);
+        setImportProgress(null);
       }
     };
     reader.readAsArrayBuffer(file);
@@ -198,11 +322,34 @@ export default function ImportMediazioni() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (parsedRows.length === 0) return;
-    fetcher.submit(
-      { rows: JSON.stringify(parsedRows) },
-      { method: "post", action: "/mediazioni/import" }
-    );
+    if (parsedRows.length === 0 || isImporting) return;
+    const batches = chunkRows(parsedRows, IMPORT_BATCH_SIZE);
+    if (batches.length === 0) return;
+    queueRef.current = batches.slice(1);
+    statsRef.current = {
+      total: parsedRows.length,
+      done: 0,
+      success: 0,
+      lastBatch: 0,
+      errors: [],
+    };
+    setImportProgress({
+      running: true,
+      total: parsedRows.length,
+      done: 0,
+      success: 0,
+      errors: [],
+      inFlight: batches[0]!.length,
+    });
+    submitBatch(batches[0]!);
+  };
+
+  const resetImport = () => {
+    setParsedRows([]);
+    setDetectedFormat(null);
+    setImportProgress(null);
+    phaseRef.current = "idle";
+    queueRef.current = [];
   };
 
   return (
@@ -271,15 +418,45 @@ export default function ImportMediazioni() {
             )}
           </p>
 
-          {actionData && "message" in actionData && (
+          {importProgress?.message && !isImporting && (
             <div
               className={`alert mb-3 ${
-                (actionData as { errors?: unknown[] }).errors?.length
-                  ? "alert-warning"
-                  : "alert-success"
+                importProgress.errors.length > 0 ? "alert-warning" : "alert-success"
               }`}
             >
-              <span>{(actionData as { message: string }).message}</span>
+              <span>{importProgress.message}</span>
+            </div>
+          )}
+
+          {isImporting && importProgress && (
+            <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 space-y-1.5 mb-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <span className="font-medium text-base-content flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                  Importazione in corso…
+                </span>
+                <span className="tabular-nums text-base-content/80">
+                  {importProgress.done} / {importProgress.total}
+                  {remaining > 0 ? ` · ne mancano ${remaining}` : ""}
+                </span>
+              </div>
+              <progress
+                className="progress progress-primary w-full h-2"
+                value={progressValue}
+                max={Math.max(1, importProgress.total)}
+              />
+              <p className="text-xs text-base-content/55">
+                Aggiornate/create {importProgress.success}
+                {importProgress.inFlight > 0
+                  ? ` · in lavorazione ${importProgress.done + 1}–${Math.min(
+                      importProgress.total,
+                      importProgress.done + importProgress.inFlight
+                    )}`
+                  : ""}
+                {importProgress.errors.length > 0
+                  ? ` · ${importProgress.errors.length} errori finora`
+                  : ""}
+              </p>
             </div>
           )}
 
@@ -525,17 +702,16 @@ export default function ImportMediazioni() {
 
             <div className="flex flex-wrap items-center justify-between gap-3 py-3 px-4 border-t border-base-200 bg-base-200">
               <p className="text-sm text-base-content/70">
-                {parsedRows.length} righe da importare
+                {isImporting && importProgress
+                  ? `${importProgress.done} / ${importProgress.total} righe elaborate`
+                  : `${parsedRows.length} righe da importare`}
               </p>
               <div className="flex flex-wrap gap-3">
-                {!(actionData && "success" in actionData) && (
+                {!importDone && (
                   <form onSubmit={handleSubmit} className="flex flex-wrap gap-3">
                     <button
                       type="button"
-                      onClick={() => {
-                        setParsedRows([]);
-                        setDetectedFormat(null);
-                      }}
+                      onClick={resetImport}
                       disabled={isImporting}
                       className="btn btn-ghost btn-sm"
                     >
@@ -549,7 +725,9 @@ export default function ImportMediazioni() {
                       {isImporting ? (
                         <>
                           <Loader2 className="w-4 h-4 animate-spin" />
-                          Importazione in corso...
+                          {importProgress
+                            ? `${importProgress.done}/${importProgress.total}…`
+                            : "Importazione…"}
                         </>
                       ) : (
                         <>
@@ -560,14 +738,11 @@ export default function ImportMediazioni() {
                     </button>
                   </form>
                 )}
-                {actionData && "success" in actionData && (
+                {importDone && (
                   <>
                     <button
                       type="button"
-                      onClick={() => {
-                        setParsedRows([]);
-                        setDetectedFormat(null);
-                      }}
+                      onClick={resetImport}
                       className="btn btn-ghost btn-sm"
                     >
                       Importa altro file
