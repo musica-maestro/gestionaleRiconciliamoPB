@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
-import { Form, Link, useActionData, useNavigation } from "@remix-run/react";
+import { useEffect, useRef, useState } from "react";
+import { Form, Link, useActionData, useNavigation, useSubmit } from "@remix-run/react";
 import { json, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
 import type { MetaFunction } from "@remix-run/node";
 import { ArrowLeft, CheckCircle, FileText, Upload } from "lucide-react";
 import { getCurrentRole, requireUser } from "~/lib/auth.server";
 import { createPB } from "~/lib/pocketbase.server";
+import { isUploadedFile } from "~/lib/form-data.server";
 import {
   collectPdfsFromUploads,
   importConvocazioniFromAlfared,
@@ -50,12 +51,8 @@ export async function action({ request }: ActionFunctionArgs) {
   const mode = String(formData.get("mode") ?? "");
 
   try {
-    const csvFiles = (formData.getAll("csv") as File[]).filter(
-      (f): f is File => f instanceof File && f.size > 0,
-    );
-    const pdfZipFiles = (formData.getAll("pdfs") as File[]).filter(
-      (f): f is File => f instanceof File && f.size > 0,
-    );
+    const csvFiles = formData.getAll("csv").filter(isUploadedFile);
+    const pdfZipFiles = formData.getAll("pdfs").filter(isUploadedFile);
 
     if (mode === "preview" || mode === "import") {
       if (csvFiles.length === 0) {
@@ -192,11 +189,14 @@ export async function action({ request }: ActionFunctionArgs) {
 export default function ConvocazioniUpload() {
   const actionData = useActionData<ActionData>();
   const navigation = useNavigation();
+  const submit = useSubmit();
   const isSubmitting = navigation.state === "submitting";
 
   const [csvNames, setCsvNames] = useState<string[]>([]);
   const [pdfNames, setPdfNames] = useState<string[]>([]);
   const [selectedRows, setSelectedRows] = useState<number[]>([]);
+  const csvFilesRef = useRef<File[]>([]);
+  const pdfFilesRef = useRef<File[]>([]);
 
   const processResult = actionData?.processResult;
   const validRows = processResult?.validRows ?? [];
@@ -216,6 +216,20 @@ export default function ConvocazioniUpload() {
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [processResult]);
+
+  function handleImport() {
+    if (selectedRows.length === 0) return;
+    if (csvFilesRef.current.length === 0 || pdfFilesRef.current.length === 0) {
+      alert("File persi dalla sessione — ricomincia e seleziona di nuovo CSV + ZIP.");
+      return;
+    }
+    const fd = new FormData();
+    fd.set("mode", "import");
+    fd.set("validRowIndices", JSON.stringify(selectedRows));
+    for (const f of csvFilesRef.current) fd.append("csv", f);
+    for (const f of pdfFilesRef.current) fd.append("pdfs", f);
+    submit(fd, { method: "post", encType: "multipart/form-data" });
+  }
 
   return (
     <div className="space-y-4 max-w-5xl">
@@ -266,6 +280,9 @@ export default function ConvocazioniUpload() {
                 ))}
               </ul>
             )}
+            <Link to="/mediazioni?tab=aperte" className="link link-hover text-sm mt-2 inline-block">
+              Vai alle mediazioni aperte →
+            </Link>
           </div>
         </div>
       )}
@@ -286,9 +303,11 @@ export default function ConvocazioniUpload() {
                 accept=".csv,text/csv"
                 multiple
                 className="file-input file-input-bordered file-input-sm w-full"
-                onChange={(e) =>
-                  setCsvNames(e.target.files ? Array.from(e.target.files).map((f) => f.name) : [])
-                }
+                onChange={(e) => {
+                  const files = e.target.files ? Array.from(e.target.files) : [];
+                  csvFilesRef.current = files;
+                  setCsvNames(files.map((f) => f.name));
+                }}
                 required
               />
               {csvNames.length > 0 && (
@@ -306,9 +325,11 @@ export default function ConvocazioniUpload() {
                 accept=".pdf,.zip,application/pdf,application/zip"
                 multiple
                 className="file-input file-input-bordered file-input-sm w-full"
-                onChange={(e) =>
-                  setPdfNames(e.target.files ? Array.from(e.target.files).map((f) => f.name) : [])
-                }
+                onChange={(e) => {
+                  const files = e.target.files ? Array.from(e.target.files) : [];
+                  pdfFilesRef.current = files;
+                  setPdfNames(files.map((f) => f.name));
+                }}
                 required
               />
               {pdfNames.length > 0 && (
@@ -338,6 +359,11 @@ export default function ConvocazioniUpload() {
               Anteprima: {validRows.length} importabili · {invalidRows.length} errori ·{" "}
               {existingSet.size} già presenti · {actionData?.pdfCount ?? 0} PDF nello ZIP
             </p>
+            {(csvNames.length > 0 || pdfNames.length > 0) && (
+              <p className="text-xs text-base-content/60">
+                File: {[...csvNames, ...pdfNames].join(" · ")}
+              </p>
+            )}
           </div>
 
           {addable.length > 0 && (
@@ -438,44 +464,18 @@ export default function ConvocazioniUpload() {
             </div>
           )}
 
-          <Form
-            method="post"
-            encType="multipart/form-data"
-            className="card bg-base-100 border border-base-300 shadow-sm"
-          >
+          <div className="card bg-base-100 border border-base-300 shadow-sm">
             <div className="card-body gap-3">
-              <input type="hidden" name="mode" value="import" />
-              <input type="hidden" name="validRowIndices" value={JSON.stringify(selectedRows)} />
               <p className="text-sm text-base-content/70">
-                Ricarica gli <strong>stessi</strong> CSV + ZIP/PDF per confermare l&apos;import.
+                Verranno usati i file già caricati per l&apos;anteprima — non serve selezionarli di
+                nuovo.
               </p>
-              <label className="form-control w-full">
-                <span className="label-text font-medium mb-1">CSV Alfared *</span>
-                <input
-                  type="file"
-                  name="csv"
-                  accept=".csv,text/csv"
-                  multiple
-                  className="file-input file-input-bordered file-input-sm w-full"
-                  required
-                />
-              </label>
-              <label className="form-control w-full">
-                <span className="label-text font-medium mb-1">ZIP/PDF contenuto *</span>
-                <input
-                  type="file"
-                  name="pdfs"
-                  accept=".pdf,.zip,application/pdf,application/zip"
-                  multiple
-                  className="file-input file-input-bordered file-input-sm w-full"
-                  required
-                />
-              </label>
               <div className="flex flex-wrap gap-2">
                 <button
-                  type="submit"
+                  type="button"
                   className="btn btn-primary btn-sm"
                   disabled={isSubmitting || selectedRows.length === 0}
+                  onClick={handleImport}
                 >
                   {isSubmitting
                     ? "Importazione…"
@@ -486,7 +486,7 @@ export default function ConvocazioniUpload() {
                 </Link>
               </div>
             </div>
-          </Form>
+          </div>
         </div>
       )}
     </div>

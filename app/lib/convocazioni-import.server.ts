@@ -6,6 +6,9 @@ import type PocketBase from "pocketbase";
 import JSZip from "jszip";
 import { STATO_RACCOMANDATA_VALUES, type StatoRaccomandata } from "~/lib/esito-finale";
 
+/** Blob-like upload from FormData (Node 18 has no global File). */
+type UploadedBlob = Blob & { name: string; size: number };
+
 export const TIPO_CONTENUTO_RACCOMANDATA = "Contenuto raccomandata";
 
 const COLUMN_MAPPINGS = {
@@ -306,7 +309,7 @@ export async function processAlfaredCsvText(text: string): Promise<AlfaredProces
   return { validRows, invalidRows, headers, columnMap };
 }
 
-export async function processAlfaredFiles(files: File[]): Promise<AlfaredProcessResult> {
+export async function processAlfaredFiles(files: UploadedBlob[]): Promise<AlfaredProcessResult> {
   const allValid: ParsedAlfaredRow[] = [];
   const allInvalid: AlfaredProcessResult["invalidRows"] = [];
   let headers: string[] = [];
@@ -362,7 +365,7 @@ async function findChiamatoPartecipazione(
   try {
     const list = await pb.collection("partecipazioni").getList(1, 5, {
       filter: `mediazione = "${mediazioneId}" && istante_o_chiamato = "Chiamato"`,
-      sort: "created",
+      sort: "id",
     });
     return list.items[0]?.id ?? null;
   } catch {
@@ -377,7 +380,7 @@ async function findIstantePartecipazione(
   try {
     const list = await pb.collection("partecipazioni").getList(1, 5, {
       filter: `mediazione = "${mediazioneId}" && istante_o_chiamato = "Istante"`,
-      sort: "created",
+      sort: "id",
     });
     return list.items[0]?.id ?? null;
   } catch {
@@ -550,10 +553,12 @@ export async function importConvocazioniFromAlfared(
             : undefined,
         });
         created++;
-        mediazioniToOpen.add(mediazioneId);
       } else {
         skipped++;
       }
+
+      // Always move da-convocare → aperte once the ritorno is applied for this pratica.
+      mediazioniToOpen.add(mediazioneId);
 
       // Document always lands in Documenti (idempotent by mediazione + tipo + numero in descrizione)
       try {
@@ -629,7 +634,7 @@ export function indexPdfsByMediazioneId(
 
 /** Collect PDF blobs from loose files and/or ZIP (incl. nested _pdf.zip). */
 export async function collectPdfsFromUploads(
-  files: File[],
+  files: UploadedBlob[],
 ): Promise<Array<{ name: string; blob: Blob }>> {
   const out: Array<{ name: string; blob: Blob }> = [];
 
