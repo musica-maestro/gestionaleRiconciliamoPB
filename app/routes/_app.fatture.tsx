@@ -47,17 +47,21 @@ export async function loader({ request }: LoaderFunctionArgs) {
   let rows = fattureRaw.map((f: Record<string, unknown>) => {
     const expand = f.expand as Record<string, unknown> | null;
     const mediazione = expand?.mediazione as Record<string, string> | null;
-    const partecipazione = expand?.partecipazione as Record<string, { expand?: { soggetto?: Record<string, string> } }> | null;
+    const partecipazione = expand?.partecipazione as
+      | (Record<string, unknown> & { expand?: { soggetto?: Record<string, string> }; istante_o_chiamato?: string })
+      | null;
     const s = partecipazione?.expand?.soggetto ?? null;
     const parteName = s
       ? (s.tipo === "Giuridica" ? s.ragione_sociale : [s.nome, s.cognome].filter(Boolean).join(" "))
-      : "—";
+      : "";
+    const ruolo = (partecipazione?.istante_o_chiamato as string) || "";
     return {
       id: f.id,
       numero_fattura: f.numero_fattura ?? "—",
       mediazione_id: f.mediazione,
       rgm: mediazione?.rgm ?? "—",
-      parte: parteName,
+      ruolo,
+      parte: parteName || "—",
       data_emissione_fattura: f.data_emissione_fattura ?? null,
       data_incasso: f.data_incasso ?? null,
       imponibile: f.imponibile ?? null,
@@ -67,7 +71,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   if (numero) rows = rows.filter((r) => String(r.numero_fattura).toLowerCase().includes(numero));
   if (rgm) rows = rows.filter((r) => String(r.rgm).toLowerCase().includes(rgm));
-  if (parte) rows = rows.filter((r) => String(r.parte).toLowerCase().includes(parte));
+  if (parte) {
+    rows = rows.filter(
+      (r) =>
+        String(r.parte).toLowerCase().includes(parte) ||
+        String(r.ruolo).toLowerCase().includes(parte)
+    );
+  }
   if (data_da) rows = rows.filter((r) => r.data_emissione_fattura && String(r.data_emissione_fattura).slice(0, 10) >= data_da);
   if (data_a) rows = rows.filter((r) => r.data_emissione_fattura && String(r.data_emissione_fattura).slice(0, 10) <= data_a);
 
@@ -242,7 +252,7 @@ export default function FattureList() {
                 <div className={filterableTableHeaderLabelClass}>
                   <SortLink label="Parte" field="parte" currentSort={sortField} currentOrder={order} searchParams={searchParams} />
                 </div>
-                <FilterTextInput name="parte" defaultValue={filters.parte} placeholder="Parte" />
+                <FilterTextInput name="parte" defaultValue={filters.parte} placeholder="Istante / Chiamato / nome" />
               </th>
               <th className={`${filterableTableThClass} min-w-[200px]`}>
                 <div className={filterableTableHeaderLabelClass}>
@@ -287,7 +297,18 @@ export default function FattureList() {
                       {f.rgm}
                     </Link>
                   </td>
-                  <td className="py-2">{f.parte}</td>
+                  <td className="py-2">
+                    {f.ruolo ? (
+                      <div>
+                        <div className="font-medium">{f.ruolo}</div>
+                        {f.parte && f.parte !== "—" ? (
+                          <div className="text-xs text-base-content/60 mt-0.5">{f.parte}</div>
+                        ) : null}
+                      </div>
+                    ) : (
+                      f.parte
+                    )}
+                  </td>
                   <td className="py-2 whitespace-nowrap">
                     {f.data_emissione_fattura ? new Date(f.data_emissione_fattura).toLocaleDateString("it-IT") : "—"}
                   </td>

@@ -21,6 +21,7 @@ import {
   createLetteraIncaricoForMediazione,
   ensureLetteraIncaricoModello,
 } from "~/lib/lettera-incarico.server";
+import { isUploadedFile } from "~/lib/form-data.server";
 
 // Converts a "YYYY-MM-DDTHH:MM" string (interpreted as Europe/Rome local time) to a
 // PocketBase-compatible UTC string "YYYY-MM-DD HH:MM:SS.000Z".
@@ -419,20 +420,38 @@ export async function action({ request, params }: ActionFunctionArgs) {
     const descrizione = String(formData.get("descrizione") ?? "").trim();
     const file = formData.get("file");
 
-    if (!file) {
-      return redirect(`/mediazioni/${id}?tab=documenti`);
+    if (!isUploadedFile(file)) {
+      return json({
+        toast: "error" as const,
+        mediazioneId: id,
+        message: "Seleziona un file da caricare.",
+      });
     }
 
     const docForm = new FormData();
     docForm.append("mediazione", id);
     if (tipo) docForm.append("tipo", tipo);
     if (descrizione) docForm.append("descrizione", descrizione);
-    docForm.append("file", file);
+    docForm.append("file", file, file.name);
 
-    await pb.collection("documenti").create(docForm);
+    try {
+      await pb.collection("documenti").create(docForm);
+    } catch (e) {
+      const err = e as { message?: string; response?: { message?: string } };
+      const detail =
+        err.response?.message ||
+        err.message ||
+        (e instanceof Error ? e.message : "Errore sconosciuto");
+      return json({
+        toast: "error" as const,
+        mediazioneId: id,
+        message: `Impossibile salvare il documento: ${detail}`,
+      });
+    }
     return redirect(`/mediazioni/${id}?tab=documenti`);
   } else if (intent === "add_fattura") {
     const numero_fattura = String(formData.get("numero_fattura") ?? "").trim() || undefined;
+    const partecipazione = String(formData.get("partecipazione_id") ?? "").trim() || undefined;
     const data_emissione_fattura = formData.get("data_emissione_fattura")
       ? String(formData.get("data_emissione_fattura"))
       : undefined;
@@ -447,6 +466,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
     const nota = String(formData.get("nota") ?? "").trim() || undefined;
     await pb.collection("fatture").create({
       mediazione: id,
+      partecipazione: partecipazione || null,
       numero_fattura,
       data_emissione_fattura: data_emissione_fattura || null,
       data_incasso: data_incasso || null,
@@ -458,6 +478,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
     const fattura_id = String(formData.get("fattura_id") ?? "");
     if (!fattura_id) return redirect(`/mediazioni/${id}?tab=fatture`);
     const numero_fattura = String(formData.get("numero_fattura") ?? "").trim() || undefined;
+    const partecipazione = String(formData.get("partecipazione_id") ?? "").trim() || undefined;
     const data_emissione_fattura = formData.get("data_emissione_fattura")
       ? String(formData.get("data_emissione_fattura"))
       : undefined;
@@ -471,6 +492,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
         : undefined;
     const nota = String(formData.get("nota") ?? "").trim() || undefined;
     await pb.collection("fatture").update(fattura_id, {
+      partecipazione: partecipazione || null,
       numero_fattura,
       data_emissione_fattura: data_emissione_fattura || null,
       data_incasso: data_incasso || null,
@@ -750,14 +772,21 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     link_incontro: m.link_incontro ?? "",
   }));
 
-  const fatture = (fattureResp as Record<string, unknown>[]).map((f) => ({
-    id: f.id,
-    numero_fattura: f.numero_fattura ?? "",
-    data_emissione_fattura: f.data_emissione_fattura,
-    data_incasso: f.data_incasso,
-    imponibile: f.imponibile ?? "",
-    nota: f.nota ?? "",
-  }));
+  const partecipazioniById = Object.fromEntries(partecipazioni.map((p) => [p.id, p]));
+  const fatture = (fattureResp as Record<string, unknown>[]).map((f) => {
+    const part = partecipazioniById[f.partecipazione as string];
+    return {
+      id: f.id,
+      partecipazione_id: (f.partecipazione as string) || "",
+      istante_o_chiamato: part?.istante_o_chiamato ?? "",
+      parte_name: part?.soggetto_name ?? "",
+      numero_fattura: f.numero_fattura ?? "",
+      data_emissione_fattura: f.data_emissione_fattura,
+      data_incasso: f.data_incasso,
+      imponibile: f.imponibile ?? "",
+      nota: f.nota ?? "",
+    };
+  });
 
   const soggetti = (soggettiList as Record<string, unknown>[]).map((s) => ({
     id: s.id as string,
@@ -2023,7 +2052,7 @@ function AddDocumentoDialog({
             <select name="tipo" className={EDIT_INPUT} defaultValue="">
               <option value="">— Seleziona tipo —</option>
               {documentiTipi.map((t) => (
-                <option key={t.id} value={t.nome}>{t.nome}</option>
+                <option key={t.id} value={t.id}>{t.nome}</option>
               ))}
             </select>
           </div>
@@ -2058,9 +2087,11 @@ function AddDocumentoDialog({
 
 function EditFatturaDialog({
   fattura,
+  partecipazioni,
   onClose,
 }: {
   fattura: Fattura | null;
+  partecipazioni: Array<{ id: string; soggetto_name: string; istante_o_chiamato: string }>;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -2090,6 +2121,22 @@ function EditFatturaDialog({
         <Form method="post" onSubmit={onClose} className="px-5 py-4 space-y-4">
           <input type="hidden" name="_action" value="update_fattura" />
           <input type="hidden" name="fattura_id" value={fattura.id} />
+          <div>
+            <label className={EDIT_LABEL}>Parte <span className="text-red-500">*</span></label>
+            <select
+              name="partecipazione_id"
+              required
+              defaultValue={fattura.partecipazione_id}
+              className={EDIT_INPUT}
+            >
+              <option value="">— Seleziona parte —</option>
+              {partecipazioni.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.istante_o_chiamato} — {p.soggetto_name}
+                </option>
+              ))}
+            </select>
+          </div>
           <div>
             <label className={EDIT_LABEL}>N. Fattura</label>
             <input name="numero_fattura" defaultValue={fattura.numero_fattura} className={EDIT_INPUT} placeholder="es. 2024-001" />
@@ -2274,7 +2321,15 @@ function EditConvocazioneDialog({
 
 // ─── Add Fattura Dialog ────────────────────────────────────────────────────────
 
-function AddFatturaDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+function AddFatturaDialog({
+  isOpen,
+  onClose,
+  partecipazioni,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  partecipazioni: Array<{ id: string; soggetto_name: string; istante_o_chiamato: string }>;
+}) {
   useEffect(() => {
     if (!isOpen) return;
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -2296,39 +2351,56 @@ function AddFatturaDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
             <X className="h-4 w-4" />
           </button>
         </div>
-        <Form method="post" onSubmit={onClose} className="px-5 py-4 space-y-4">
-          <input type="hidden" name="_action" value="add_fattura" />
-          <div>
-            <label className={EDIT_LABEL}>N. Fattura</label>
-            <input name="numero_fattura" className={EDIT_INPUT} placeholder="es. 2024-001" />
+        {partecipazioni.length === 0 ? (
+          <div className="px-5 py-4 text-slate-500 text-sm">
+            Aggiungi prima almeno una parte (Istante o Chiamato) nella tab Parti.
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        ) : (
+          <Form method="post" onSubmit={onClose} className="px-5 py-4 space-y-4">
+            <input type="hidden" name="_action" value="add_fattura" />
             <div>
-              <label className={EDIT_LABEL}>Data emissione</label>
-              <input type="date" name="data_emissione_fattura" className={EDIT_INPUT} />
+              <label className={EDIT_LABEL}>Parte <span className="text-red-500">*</span></label>
+              <select name="partecipazione_id" required className={EDIT_INPUT}>
+                <option value="">— Seleziona parte —</option>
+                {partecipazioni.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.istante_o_chiamato} — {p.soggetto_name}
+                  </option>
+                ))}
+              </select>
             </div>
             <div>
-              <label className={EDIT_LABEL}>Data incasso</label>
-              <input type="date" name="data_incasso" className={EDIT_INPUT} />
+              <label className={EDIT_LABEL}>N. Fattura</label>
+              <input name="numero_fattura" className={EDIT_INPUT} placeholder="es. 2024-001" />
             </div>
-          </div>
-          <div>
-            <label className={EDIT_LABEL}>Imponibile (€)</label>
-            <input name="imponibile" type="number" step="0.01" min="0" className={EDIT_INPUT} placeholder="0.00" />
-          </div>
-          <div>
-            <label className={EDIT_LABEL}>Nota</label>
-            <textarea name="nota" rows={2} className={EDIT_INPUT} />
-          </div>
-          <div className="pt-1 flex gap-2.5">
-            <button type="button" onClick={onClose} className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors">
-              Annulla
-            </button>
-            <button type="submit" className="flex-1 rounded-lg bg-[#3aaeba] px-3 py-2 text-sm font-semibold text-white hover:bg-[#349aa5] transition-colors">
-              Aggiungi fattura
-            </button>
-          </div>
-        </Form>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className={EDIT_LABEL}>Data emissione</label>
+                <input type="date" name="data_emissione_fattura" className={EDIT_INPUT} />
+              </div>
+              <div>
+                <label className={EDIT_LABEL}>Data incasso</label>
+                <input type="date" name="data_incasso" className={EDIT_INPUT} />
+              </div>
+            </div>
+            <div>
+              <label className={EDIT_LABEL}>Imponibile (€)</label>
+              <input name="imponibile" type="number" step="0.01" min="0" className={EDIT_INPUT} placeholder="0.00" />
+            </div>
+            <div>
+              <label className={EDIT_LABEL}>Nota</label>
+              <textarea name="nota" rows={2} className={EDIT_INPUT} />
+            </div>
+            <div className="pt-1 flex gap-2.5">
+              <button type="button" onClick={onClose} className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors">
+                Annulla
+              </button>
+              <button type="submit" className="flex-1 rounded-lg bg-[#3aaeba] px-3 py-2 text-sm font-semibold text-white hover:bg-[#349aa5] transition-colors">
+                Aggiungi fattura
+              </button>
+            </div>
+          </Form>
+        )}
       </div>
     </div>
   );
@@ -2347,6 +2419,9 @@ type Incontro = {
 
 type Fattura = {
   id: string;
+  partecipazione_id: string;
+  istante_o_chiamato: string;
+  parte_name: string;
   numero_fattura: string;
   data_emissione_fattura: string | null | undefined;
   data_incasso: string | null | undefined;
@@ -3469,6 +3544,9 @@ export default function MediazioneDetail() {
                         N. Fattura
                       </th>
                       <th className="px-3 py-2 text-left text-[11px] sm:text-xs font-medium text-slate-500">
+                        Parte
+                      </th>
+                      <th className="px-3 py-2 text-left text-[11px] sm:text-xs font-medium text-slate-500">
                         Data emissione
                       </th>
                       <th className="px-3 py-2 text-left text-[11px] sm:text-xs font-medium text-slate-500">
@@ -3487,6 +3565,20 @@ export default function MediazioneDetail() {
                     {fatture.map((f) => (
                       <tr key={String(f.id)}>
                         <td className="px-3 py-1.5 text-xs sm:text-sm text-slate-900">{String(f.numero_fattura) || "—"}</td>
+                        <td className="px-3 py-1.5">
+                          {f.istante_o_chiamato ? (
+                            <div>
+                              <div className="text-xs sm:text-sm font-medium text-slate-800">
+                                {f.istante_o_chiamato}
+                              </div>
+                              {f.parte_name ? (
+                                <div className="text-[11px] text-slate-500 mt-0.5">{f.parte_name}</div>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <span className="text-xs sm:text-sm text-slate-400">—</span>
+                          )}
+                        </td>
                         <td className="px-3 py-1.5 text-xs sm:text-sm text-slate-600">
                           {f.data_emissione_fattura
                             ? new Date(f.data_emissione_fattura as string).toLocaleDateString("it-IT")
@@ -3712,11 +3804,13 @@ export default function MediazioneDetail() {
       <AddFatturaDialog
         isOpen={dialogMode?.type === "addFattura"}
         onClose={closeDialog}
+        partecipazioni={partecipazioni}
       />
 
       {/* ── Edit Fattura dialog ── */}
       <EditFatturaDialog
         fattura={dialogMode?.type === "editFattura" ? dialogMode.fattura : null}
+        partecipazioni={partecipazioni}
         onClose={closeDialog}
       />
 

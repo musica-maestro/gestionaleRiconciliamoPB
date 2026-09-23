@@ -18,7 +18,15 @@ function xmlEscape(value: string): string {
 
 /** Display variants used in Word MERGEFIELD templates. */
 function mergeFieldNeedles(fieldName: string): string[] {
-  return [`\u00ab${fieldName}\u00bb`, `&lt;${fieldName}&gt;`, `<${fieldName}>`];
+  const trimmed = fieldName.trim();
+  return [
+    `\u00ab${trimmed}\u00bb`,
+    `&lt;${trimmed}&gt;`,
+    `<${trimmed}>`,
+    // Some templates have a stray space inside the brackets, e.g. "< CF_Chiamato>"
+    `&lt; ${trimmed}&gt;`,
+    `< ${trimmed}>`,
+  ];
 }
 
 /** Parse all `<w:t>` text runs from a Word XML fragment. */
@@ -119,6 +127,29 @@ export function flattenWordFields(xml: string): string {
 }
 
 /**
+ * Strip leftover punctuation from empty address MERGEFIELD layouts, e.g.
+ * `«Indirizzo1» «Numero_civico» «Riga_2» , «Comune» ( «Provincia» )`
+ * → `, ()` when all values are blank.
+ */
+export function cleanupEmptyAddressArtifacts(xml: string): string {
+  // Match comma + empty parentheses with flexible whitespace.
+  const artifactRe = /,\s*\(\s*\)/g;
+  let iterations = 0;
+  while (iterations++ < 50) {
+    const runs = parseTextRuns(xml);
+    const virtualText = runs.map((r) => r.content).join("");
+    artifactRe.lastIndex = 0;
+    const m = artifactRe.exec(virtualText);
+    if (!m) break;
+    const needle = m[0];
+    const next = replaceOneOccurrence(xml, runs, needle, "");
+    if (next === xml) break;
+    xml = next;
+  }
+  return xml;
+}
+
+/**
  * Fill Word MERGEFIELD placeholders in a DOCX buffer, then unlink fields to
  * plain text so PDF conversion keeps the values.
  * Supports «field», &lt;field&gt;, and <field> display text.
@@ -138,10 +169,13 @@ export async function fillWordMergeFields(
     if (!xmlFile) continue;
     let xml = await xmlFile.async("string");
 
-    for (const [fieldName, value] of Object.entries(data)) {
+    // Longer names first so e.g. PEC_Avvocato is not partially matched via PEC.
+    const entries = Object.entries(data).sort((a, b) => b[0].length - a[0].length);
+    for (const [fieldName, value] of entries) {
       xml = replaceAllOccurrences(xml, fieldName, value ?? "");
     }
     xml = flattenWordFields(xml);
+    xml = cleanupEmptyAddressArtifacts(xml);
 
     zip.file(entry, xml);
   }

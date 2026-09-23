@@ -306,7 +306,7 @@ export type DocumentiTipiRecord = {
 export type FattureRecord = {
   id: string
   mediazione: RecordIdString
-  partecipazione?: RecordIdString
+  partecipazione: RecordIdString
   numero_fattura?: string
   data_emissione_fattura?: IsoDateString
   data_incasso?: IsoDateString

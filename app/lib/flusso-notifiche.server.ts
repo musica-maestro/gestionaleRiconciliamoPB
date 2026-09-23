@@ -352,6 +352,40 @@ function soggettoCognomeOrRs(s: SoggettoLite | null | undefined): string {
   return String(s.cognome ?? "").trim();
 }
 
+/** True when the soggetto has a usable identity (skip empty placeholder rows). */
+function soggettoHasIdentity(s: SoggettoLite | null | undefined): boolean {
+  return Boolean(soggettoDisplayName(s));
+}
+
+function soggettoHasPostalAddress(s: SoggettoLite | null | undefined): boolean {
+  if (!s) return false;
+  return Boolean(
+    String(s.indirizzo_riga_1 ?? "").trim() &&
+      String(s.comune ?? "").trim() &&
+      String(s.cap ?? "").trim(),
+  );
+}
+
+/**
+ * Prefer soggetti with name/ragione sociale and (for chiamato) a postal address.
+ * Empty Fisica placeholders from bad imports must not win over persone giuridiche.
+ */
+function pickBestSoggetto(
+  candidates: SoggettoLite[],
+  opts?: { preferAddress?: boolean },
+): SoggettoLite | null {
+  const named = candidates.filter(soggettoHasIdentity);
+  const pool = named.length > 0 ? named : candidates;
+  if (pool.length === 0) return null;
+  if (opts?.preferAddress) {
+    const withAddr = pool.filter(soggettoHasPostalAddress);
+    if (withAddr.length > 0) return withAddr[0];
+  }
+  // Prefer Giuridica when both kinds are present (common for company-vs-placeholder noise).
+  const giuridica = pool.find((s) => String(s.tipo ?? "") === "Giuridica");
+  return giuridica ?? pool[0];
+}
+
 function materiaCheckboxes(oggetto: string): Record<string, string> {
   const out: Record<string, string> = {};
   const norm = oggetto.trim().toLowerCase();
@@ -445,7 +479,10 @@ function buildAdesioneData(opts: {
     .filter(Boolean)
     .join(", ");
 
-  return {
+  // Persona fisica: keep the previous export mapping unchanged.
+  // Persona giuridica: same PG + avvocato fields, but leave the PF block empty
+  // so address/PEC are not duplicated into "PARTE CHIAMATA PERSONA FISICA".
+  const base = {
     RGM: rgm,
     Nome_Chiamato: String(chiamato.nome ?? "").trim(),
     Cognome_Chiamato: String(chiamato.cognome ?? "").trim(),
@@ -469,6 +506,21 @@ function buildAdesioneData(opts: {
     Telefono_Avvocato: String(avvocato?.telefono ?? "").trim(),
     PEC_Avvocato: String(avvocato?.pec ?? "").trim(),
     ...materiaCheckboxes(oggetto),
+  };
+
+  if (!isGiuridica) return base;
+
+  return {
+    ...base,
+    Nome_Chiamato: "",
+    Cognome_Chiamato: "",
+    CF_Chiamato: "",
+    Indirizzo1: "",
+    Numero_civico: "",
+    Riga_2: "",
+    Comune: "",
+    Provincia: "",
+    PEC: "",
   };
 }
 
@@ -670,14 +722,40 @@ export async function buildFlussoNotificheZip(
         continue;
       }
 
-      const chiamatoId = String(chiamatiP[0].soggetto);
-      const istanteId = istantiP[0] ? String(istantiP[0].soggetto) : "";
-      const chiamato = (await pb
-        .collection("soggetti")
-        .getOne(chiamatoId)) as unknown as SoggettoLite;
-      const istante = istanteId
-        ? ((await pb.collection("soggetti").getOne(istanteId)) as unknown as SoggettoLite)
-        : null;
+      const soggettiById = new Map<string, SoggettoLite>();
+      const loadSoggetto = async (sid: string) => {
+        let s = soggettiById.get(sid);
+        if (!s) {
+          s = (await pb.collection("soggetti").getOne(sid)) as unknown as SoggettoLite;
+          soggettiById.set(sid, s);
+        }
+        return s;
+      };
+
+      const chiamatiSoggetti = await Promise.all(
+        chiamatiP.map(async (p) => ({
+          p,
+          s: await loadSoggetto(String(p.soggetto)),
+        })),
+      );
+      const istantiSoggetti = await Promise.all(
+        istantiP.map(async (p) => ({
+          p,
+          s: await loadSoggetto(String(p.soggetto)),
+        })),
+      );
+
+      const chiamato = pickBestSoggetto(
+        chiamatiSoggetti.map((x) => x.s),
+        { preferAddress: true },
+      );
+      const istante = pickBestSoggetto(istantiSoggetti.map((x) => x.s));
+      if (!chiamato) {
+        checkErrors.push(`${label}: nessun chiamato`);
+        continue;
+      }
+      const chiamatoPartecipazione =
+        chiamatiSoggetti.find((x) => x.s.id === chiamato.id)?.p ?? chiamatiP[0];
 
       const incontri = await pb.collection("incontri").getFullList({
         filter: `mediazione = "${mediazioneId}"`,
@@ -690,12 +768,12 @@ export async function buildFlussoNotificheZip(
 
       const rowErrors: string[] = [];
       if (!rgm) rowErrors.push("RGM mancante");
-      if (!codiceUnivoco) rowErrors.push("codice univoco cliente mancante");
+      // codice_univoco_cliente is optional (often empty for pratiche con sole persone giuridiche)
       if (!dataIncontro) rowErrors.push("data incontro mancante");
       if (!String(chiamato.indirizzo_riga_1 ?? "").trim()) rowErrors.push("indirizzo chiamato mancante");
       if (!String(chiamato.comune ?? "").trim()) rowErrors.push("comune chiamato mancante");
       if (!String(chiamato.cap ?? "").trim()) rowErrors.push("CAP chiamato mancante");
-      if (!istanteId) rowErrors.push("istante mancante");
+      if (!istante || !soggettoHasIdentity(istante)) rowErrors.push("istante mancante");
 
       const modelloNome = selectConvocazioneModelloNome(
         String(chiamato.tipo ?? "Fisica"),
@@ -747,7 +825,7 @@ export async function buildFlussoNotificheZip(
       }
 
       let avvocatoChiamato: AvvocatoLite | null = null;
-      const avvIdsChiamato = chiamatiP[0].avvocati ?? [];
+      const avvIdsChiamato = chiamatoPartecipazione.avvocati ?? [];
       if (avvIdsChiamato.length > 0) {
         const aid = String(avvIdsChiamato[0]);
         let a = avvocatiCache.get(aid);
