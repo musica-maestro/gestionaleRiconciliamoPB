@@ -78,7 +78,10 @@ export async function action({ request }: ActionFunctionArgs) {
   const users = await pb.collection("users").getFullList({ fields: "id,name" });
   const userNameToId: Record<string, string> = {};
   for (const u of users as { id: string; name?: string }[]) {
-    if (u.name) userNameToId[u.name] = u.id;
+    if (!u.name) continue;
+    userNameToId[u.name] = u.id;
+    const normalized = u.name.trim().toLowerCase().replace(/\s+/g, " ");
+    if (normalized) userNameToId[normalized] = u.id;
   }
 
   const { success, errors } = await importRows(pb, rows, user.id, userNameToId);
@@ -366,8 +369,8 @@ export default function ImportMediazioni() {
       <h1 className="text-2xl font-semibold text-slate-800 mb-2">Importa mediazioni</h1>
       <p className="text-slate-600 mb-6">
         Carica un Excel nel formato <strong>Tracciato Organismo</strong> oppure{" "}
-        <strong>Check Mediazioni</strong> (fogli Mediazioni + Trasmessi). Anteprima prima
-        dell&apos;import nel database.
+        <strong>Check Mediazioni</strong>. L&apos;Excel è la fonte: aggiorna per RGM tutti i
+        campi mappati. Istante/Chiamato già presenti sulla mediazione non vengono modificati.
       </p>
 
       <div className="mb-6">
@@ -405,15 +408,16 @@ export default function ImportMediazioni() {
             {detectedFormat === "check" ? (
               <>
                 Formato Check: aggiorna per RGM data iscrizione/chiusura, esito, mediatore,
-                link (istanza / adesione / chiusura) e flag <em>trasmessa</em> dal foglio
-                Trasmessi. Istante/Chiamato senza CF non ricreano soggetti se la mediazione
-                esiste già.
+                oggetto, valore, competenza, modalità, note, data incontro, link e{" "}
+                <em>trasmessa</em> (colonna Trasmissione o foglio Trasmessi). Date Excel (m/d/y
+                o serial) vengono normalizzate. Istante/Chiamato già in DB sulla mediazione non
+                vengono sovrascritti; se mancano, vengono creati (con CF se presenti).
               </>
             ) : (
               <>
-                Controlla i dati qui sotto. Istante/Chiamato in DB verranno riutilizzati (campi
-                vuoti aggiornati dall&apos;Excel). Link Istanza e Cartella &rarr; documenti. Data
-                e ora incontro &rarr; record in Incontri.
+                Controlla i dati qui sotto. Istante/Chiamato già presenti sulla mediazione non
+                vengono modificati; se mancano, vengono creati dall&apos;Excel. Link Istanza e
+                Cartella &rarr; documenti. Data e ora incontro &rarr; record in Incontri.
               </>
             )}
           </p>
@@ -473,6 +477,7 @@ export default function ImportMediazioni() {
                     {detectedFormat === "check" ? (
                       <>
                         <th className="min-w-[110px]">Data chiusura</th>
+                        <th className="min-w-[110px]">Data incontro</th>
                         <th className="min-w-[140px]">Esito</th>
                         <th className="min-w-[90px]">Trasmessa</th>
                       </>
@@ -486,12 +491,12 @@ export default function ImportMediazioni() {
                     <th className="min-w-[190px]">Istante</th>
                     <th className="min-w-[190px]">Avvocato</th>
                     <th className="min-w-[190px]">Chiamato</th>
+                    <th className="min-w-[210px]">Oggetto / Materia</th>
+                    <th className="min-w-[150px]">Valore</th>
+                    <th className="min-w-[100px]">Competenza</th>
+                    <th className="min-w-[120px]">Modalità</th>
                     {detectedFormat !== "check" && (
                       <>
-                        <th className="min-w-[210px]">Oggetto / Materia</th>
-                        <th className="min-w-[150px]">Valore</th>
-                        <th className="min-w-[100px]">Competenza</th>
-                        <th className="min-w-[120px]">Modalità</th>
                         <th className="min-w-[210px]">Modalità conv.</th>
                         <th className="min-w-[210px]">Motivazione deposito</th>
                       </>
@@ -527,6 +532,9 @@ export default function ImportMediazioni() {
                           <>
                             <td className="py-2 whitespace-nowrap">
                               {formatDateIT(row.mediazionePayload.data_chiusura)}
+                            </td>
+                            <td className="py-2 whitespace-nowrap">
+                              {formatDateIT(row.mediazionePayload.data_incontro) || "—"}
                             </td>
                             <td className="py-2 whitespace-nowrap">
                               {row.mediazionePayload.esito_finale || "—"}
@@ -610,28 +618,28 @@ export default function ImportMediazioni() {
                             )}
                           </span>
                         </td>
+                        <td className="py-2 max-w-[220px]">
+                          <span className="block truncate">
+                            {row.mediazionePayload.oggetto || "—"}
+                          </span>
+                        </td>
+                        <td className="py-2 max-w-[160px]">
+                          <span className="block truncate">
+                            {row.mediazionePayload.valore || "—"}
+                          </span>
+                        </td>
+                        <td className="py-2 max-w-[110px]">
+                          <span className="block truncate">
+                            {row.mediazionePayload.competenza || "—"}
+                          </span>
+                        </td>
+                        <td className="py-2 max-w-[130px]">
+                          <span className="block truncate">
+                            {row.mediazionePayload.modalita_mediazione || "—"}
+                          </span>
+                        </td>
                         {detectedFormat !== "check" && (
                           <>
-                            <td className="py-2 max-w-[220px]">
-                              <span className="block truncate">
-                                {row.mediazionePayload.oggetto || "—"}
-                              </span>
-                            </td>
-                            <td className="py-2 max-w-[160px]">
-                              <span className="block truncate">
-                                {row.mediazionePayload.valore || "—"}
-                              </span>
-                            </td>
-                            <td className="py-2 max-w-[110px]">
-                              <span className="block truncate">
-                                {row.mediazionePayload.competenza || "—"}
-                              </span>
-                            </td>
-                            <td className="py-2 max-w-[130px]">
-                              <span className="block truncate">
-                                {row.mediazionePayload.modalita_mediazione || "—"}
-                              </span>
-                            </td>
                             <td className="py-2 max-w-[220px]">
                               <span className="block truncate">
                                 {row.mediazionePayload.modalita_convocazione || "—"}

@@ -31,17 +31,27 @@ export function getIndirizzoChiamato(row: Record<string, unknown>): {
   };
 }
 
-/** Normalizza una data in YYYY-MM-DD. Accetta: Date, numero Excel, "gg/mm/aaaa", "m/g/aa", "YYYY-MM-DD", stringa numerica (serial). */
+/**
+ * Normalizza una data in YYYY-MM-DD.
+ * Accetta: Date, numero Excel (serial), "m/d/yy" (Excel US), "gg/mm/aaaa", "YYYY-MM-DD", stringa serial.
+ * Per stringhe ambigue (entrambe le parti ≤ 12) preferisce m/d/y come in Excel US.
+ */
 export function parseDateToISO(value: unknown): string {
   if (value === undefined || value === null) return "";
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    const dd = String(value.getUTCDate()).padStart(2, "0");
-    const mm = String(value.getUTCMonth() + 1).padStart(2, "0");
-    const yyyy = value.getUTCFullYear();
+    // Excel/SheetJS spesso dà mezzanotte locale come sera UTC del giorno prima:
+    // usa il calendario locale se l'ora UTC non è mezzanotte, altrimenti UTC.
+    const useLocal = value.getUTCHours() !== 0 || value.getUTCMinutes() !== 0;
+    const yyyy = useLocal ? value.getFullYear() : value.getUTCFullYear();
+    const mm = String((useLocal ? value.getMonth() : value.getUTCMonth()) + 1).padStart(2, "0");
+    const dd = String(useLocal ? value.getDate() : value.getUTCDate()).padStart(2, "0");
     return `${yyyy}-${mm}-${dd}`;
   }
   if (typeof value === "number") {
-    const millis = Math.round((value - 25569) * 86400 * 1000);
+    // Solo la parte intera = giorno Excel (eventuale frazione oraria ignorata per date-only)
+    const serial = Math.floor(value);
+    if (serial < 1) return "";
+    const millis = Math.round((serial - 25569) * 86400 * 1000);
     const d = new Date(millis);
     const dd = String(d.getUTCDate()).padStart(2, "0");
     const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
@@ -50,25 +60,37 @@ export function parseDateToISO(value: unknown): string {
   }
   const s = String(value).trim();
   if (!s) return "";
-  if (/^\d+$/.test(s)) {
-    const n = parseInt(s, 10);
-    if (n >= 25569) return parseDateToISO(n);
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    const n = parseFloat(s);
+    if (n >= 1) return parseDateToISO(n);
   }
   // ISO con eventuale orario (es. da JSON Date)
   const isoFull = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (isoFull) return `${isoFull[1]}-${isoFull[2]}-${isoFull[3]}`;
   const slash = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
   if (slash) {
-    let d = parseInt(slash[1], 10);
-    let m = parseInt(slash[2], 10);
-    const y = slash[3];
-    const year = y!.length === 2 ? `20${y}` : y!;
-    if (d > 12) {
-    } else if (m > 12) {
-      [d, m] = [m, d];
+    const a = parseInt(slash[1]!, 10);
+    const b = parseInt(slash[2]!, 10);
+    const y = slash[3]!;
+    const year = y.length === 2 ? `20${y}` : y;
+    let month: number;
+    let day: number;
+    if (a > 12 && b <= 12) {
+      // chiaro: d/m/y (IT)
+      day = a;
+      month = b;
+    } else if (b > 12 && a <= 12) {
+      // chiaro: m/d/y (US / Excel)
+      month = a;
+      day = b;
+    } else {
+      // ambiguo (es. 1/2/24): Excel US → m/d/y
+      month = a;
+      day = b;
     }
-    const mm = String(m).padStart(2, "0");
-    const dd = String(d).padStart(2, "0");
+    if (month < 1 || month > 12 || day < 1 || day > 31) return "";
+    const mm = String(month).padStart(2, "0");
+    const dd = String(day).padStart(2, "0");
     return `${year}-${mm}-${dd}`;
   }
   return "";
@@ -136,9 +158,13 @@ export interface ImportRow {
     data_protocollo: string | null;
     /** Data chiusura (YYYY-MM-DD) — foglio Check */
     data_chiusura: string | null;
+    /** Se true, scrive data_chiusura anche se null (Excel vuoto = clear) */
+    data_chiusura_set?: boolean;
     /** Esito finale normalizzato — foglio Check */
     esito_finale: string;
-    /** Trasmissione al ministero — foglio Trasmessi */
+    /** Se true, scrive esito_finale anche se vuoto (Excel vuoto = clear) */
+    esito_finale_set?: boolean;
+    /** Trasmissione al ministero — foglio Trasmessi / colonna Trasmissione */
     trasmessa?: boolean;
     /** Se true, aggiorna il flag trasmessa (anche a false) */
     trasmessa_set?: boolean;
@@ -228,9 +254,18 @@ export function normalizeCheckEsito(raw: string): string {
   if (key === "mancato accordo") return "Mancato accordo";
   if (key === "chiusa d'ufficio" || key === "chiusa d ufficio") return "Chiusa d'ufficio";
   if (key === "ritirata") return "Ritirata";
-  if (key === "nessuna adesione") return "Nessuna adesione";
+  if (key === "nessuna adesione" || key === "mancata adesione") return "Nessuna adesione";
   // Capitalizza prima lettera per match soft
   return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
+
+/** Colonna Trasmissione (SI/NO) → boolean; stringa vuota = non impostare. */
+export function parseTrasmissioneFlag(raw: string): boolean | undefined {
+  const key = raw.trim().toLowerCase().replace(/\s+/g, "");
+  if (!key) return undefined;
+  if (key === "si" || key === "sì" || key === "yes" || key === "true" || key === "1") return true;
+  if (key === "no" || key === "false" || key === "0") return false;
+  return undefined;
 }
 
 /**
@@ -279,6 +314,11 @@ function mapCheckRowsToImport(
         row["Data chiusura"] ?? getStr(row, "Data chiusura")
       );
       const esito_finale = normalizeCheckEsito(getStr(row, "Esito"));
+      const rawDataIncontro =
+        row["Data incontro"] ?? getStr(row, "Data incontro") ?? "";
+      const dataIncontro = parseDateToISO(rawDataIncontro);
+      const rawOraIncontro = row["Ora incontro"] ?? getStr(row, "Ora incontro") ?? "";
+      const oraIncontro = formatExcelTime(rawOraIncontro);
 
       const istanteFull = firstPerson(getStr(row, "Istante"));
       const { nome: nomeIstante, cognome: cognomeIstante } = splitNomeCognome(istanteFull);
@@ -286,31 +326,52 @@ function mapCheckRowsToImport(
       const chiamatoFull = firstPerson(getStr(row, "Chiamato"));
       const { nome: nomeChiamato, cognome: cognomeChiamato } = splitNomeCognome(chiamatoFull);
 
-      const avvFull = firstPerson(getStr(row, "Avvocati") || getStr(row, "Avvocato"));
+      const avvFull = firstPerson(
+        getStr(row, "Avvocato istante") ||
+          getStr(row, "Avvocati") ||
+          getStr(row, "Avvocato")
+      );
       const { nome: nomeAvv, cognome: cognomeAvv } = splitNomeCognome(avvFull);
+
+      // Trasmissione: colonna SI/NO ha priorità; altrimenti foglio Trasmessi
+      const trasCol = parseTrasmissioneFlag(getStr(row, "Trasmissione"));
+      const trasmessa =
+        trasCol !== undefined
+          ? trasCol
+          : trasmessiSheetPresent
+            ? trasmessiSet.has(rgm)
+            : undefined;
+      const trasmessa_set = trasCol !== undefined || trasmessiSheetPresent;
 
       const mediazionePayload = {
         rgm,
-        oggetto: "",
-        valore: "",
-        competenza: "",
-        modalita_mediazione: "",
-        motivazione_deposito: "",
-        modalita_convocazione: "",
-        nota: "",
+        oggetto:
+          getStr(row, "Oggetto / Materia") ||
+          capitalize(getStr(row, "Materia")),
+        valore: getStr(row, "Valore").trim(),
+        competenza: capitalizeFirstRestLower(getStr(row, "Competenza").trim()),
+        modalita_mediazione: capitalize(getStr(row, "Modalità").trim()),
+        motivazione_deposito:
+          capitalize(getStr(row, "Motivazione deposito").trim()) ||
+          capitalize(getStr(row, "Motivo").trim()),
+        modalita_convocazione: capitalize(getStr(row, "Modalità convocazione").trim()),
+        nota: getStr(row, "Note") || getStr(row, "Nota"),
         data_deposito: dataDeposito || null,
         data_protocollo: null as string | null,
+        // Excel = fonte: esito vuoto ⇒ mediazione aperta (clear chiusura)
         data_chiusura: esito_finale ? dataChiusura || null : null,
+        data_chiusura_set: true,
         esito_finale,
-        trasmessa: trasmessiSheetPresent ? trasmessiSet.has(rgm) : undefined,
-        trasmessa_set: trasmessiSheetPresent,
+        esito_finale_set: true,
+        trasmessa,
+        trasmessa_set,
         mediatore: getStr(row, "Mediatore"),
         link_istanza: getStr(row, "Link istanza") || getStr(row, "Link Istanza"),
-        link_cartella: "",
+        link_cartella: getStr(row, "Link Cartella") || getStr(row, "Link cartella"),
         link_adesione: getStr(row, "Link adesione"),
         link_documento_chiusura: getStr(row, "Link documento chiusura"),
-        data_incontro: "",
-        ora_incontro: "",
+        data_incontro: dataIncontro,
+        ora_incontro: oraIncontro,
       };
 
       return {
@@ -321,7 +382,7 @@ function mapCheckRowsToImport(
           tipo: "Fisica" as const,
           nome: nomeIstante || istanteFull,
           cognome: cognomeIstante,
-          codice_fiscale: "",
+          codice_fiscale: getStr(row, "CF Istante"),
         },
         avvocatoIstante: {
           nome: nomeAvv || avvFull,
@@ -331,6 +392,7 @@ function mapCheckRowsToImport(
           ...emptyParteChiamato(),
           nome: nomeChiamato || chiamatoFull,
           cognome: cognomeChiamato,
+          codice_fiscale: getStr(row, "CF Chiamato"),
         },
       };
     })

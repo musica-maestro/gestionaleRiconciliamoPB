@@ -80,6 +80,7 @@ const ALIASES: Record<string, EsitoFinale> = {
   nr: "Nessuna risposta",
   "mancata comparizione": "Nessuna risposta",
   "nessuna adesione": "Nessuna adesione",
+  "mancata adesione": "Nessuna adesione",
   improcedibile: "Ritirata",
   // legacy: treat old "In corso" / "Non consegnabile" as empty (moved to stato_raccomandata)
 };

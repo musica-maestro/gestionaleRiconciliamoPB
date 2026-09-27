@@ -98,12 +98,13 @@ async function upsertDocumentoLink(
   });
 }
 
-/** Build data_programmazione UTC from date (qualsiasi formato supportato da parseDateToISO) e ora (HH:MM o H.MM) in Europe/Rome. */
+/** Build data_programmazione UTC from date (qualsiasi formato supportato da parseDateToISO) e ora (HH:MM o H.MM) in Europe/Rome.
+ * Se manca l'ora, usa 00:00 (Excel spesso ha solo la data incontro). */
 function buildDataProgrammazioneUTC(dateStr: string, timeStr: string): string | undefined {
   const dateNorm = parseDateToISO(dateStr);
-  if (!dateNorm || !timeStr?.trim()) return undefined;
+  if (!dateNorm) return undefined;
+  const timeNorm = (timeStr?.trim() || "00:00").replace(".", ":");
   const [y, mo, d] = dateNorm.split("-").map(Number);
-  const timeNorm = timeStr.trim().replace(".", ":");
   const [h, mi] = timeNorm.split(":").map(Number);
   if (isNaN(y) || isNaN(mo) || isNaN(d) || isNaN(h) || isNaN(mi)) return undefined;
   const approxEpoch = Date.UTC(y, mo - 1, d, h, mi, 0);
@@ -232,6 +233,71 @@ async function patchSoggetto(
   return id;
 }
 
+async function ensurePartecipazioniFromExcel(
+  pb: PocketBase,
+  mediazioneId: string,
+  row: ImportRow
+): Promise<void> {
+  // Excel = fonte solo se Istante/Chiamato NON sono già presenti sulla mediazione.
+  const existingParti = await pb
+    .collection("partecipazioni")
+    .getFullList({
+      filter: pb.filter("mediazione = {:m}", { m: mediazioneId }),
+      fields: "id,istante_o_chiamato",
+    })
+    .catch(() => []);
+  const hasIstante = existingParti.some(
+    (p) => (p as { istante_o_chiamato?: string }).istante_o_chiamato === "Istante"
+  );
+  const hasChiamato = existingParti.some(
+    (p) => (p as { istante_o_chiamato?: string }).istante_o_chiamato === "Chiamato"
+  );
+
+  if (!hasIstante && (row.parteIstante.nome || row.parteIstante.cognome || row.parteIstante.codice_fiscale)) {
+    const soggettoIstanteId = await findOrCreateSoggetto(pb, row.parteIstante, {});
+    let avvocatoId: string | undefined;
+    const hasAvvocato =
+      row.avvocatoIstante.nome || row.avvocatoIstante.cognome || row.avvocatoIstante.codice_fiscale;
+    if (hasAvvocato) {
+      const avv = await pb.collection("avvocati").create({
+        nome: row.avvocatoIstante.nome || undefined,
+        cognome: row.avvocatoIstante.cognome || undefined,
+        codice_fiscale: row.avvocatoIstante.codice_fiscale,
+        pec: row.avvocatoIstante.pec,
+        telefono: row.avvocatoIstante.telefono,
+        indirizzo: row.avvocatoIstante.indirizzo,
+      });
+      avvocatoId = avv.id;
+    }
+    await pb.collection("partecipazioni").create({
+      mediazione: mediazioneId,
+      soggetto: soggettoIstanteId,
+      istante_o_chiamato: "Istante",
+      avvocati: avvocatoId ? [avvocatoId] : undefined,
+    });
+  }
+
+  if (
+    !hasChiamato &&
+    (row.parteChiamato.nome || row.parteChiamato.cognome || row.parteChiamato.codice_fiscale)
+  ) {
+    const addrChiamato: AddrFields = {
+      indirizzo_riga_1: row.parteChiamato.indirizzo_riga_1 || undefined,
+      indirizzo_riga_2: row.parteChiamato.indirizzo_riga_2 || undefined,
+      numero_civico: row.parteChiamato.numero_civico || undefined,
+      comune: row.parteChiamato.comune || undefined,
+      provincia: row.parteChiamato.provincia || undefined,
+      cap: row.parteChiamato.cap || undefined,
+    };
+    const soggettoChiamatoId = await findOrCreateSoggetto(pb, row.parteChiamato, addrChiamato);
+    await pb.collection("partecipazioni").create({
+      mediazione: mediazioneId,
+      soggetto: soggettoChiamatoId,
+      istante_o_chiamato: "Chiamato",
+    });
+  }
+}
+
 export async function importRows(
   pb: PocketBase,
   rows: ImportRow[],
@@ -262,10 +328,12 @@ export async function importRows(
   for (const row of rows) {
     try {
       // Only set mediatore when Excel has a resolvable name — never default to importer.
+      const mediatoreName = (row.mediazionePayload.mediatore || "").trim();
+      const mediatoreKey = mediatoreName.toLowerCase().replace(/\s+/g, " ");
       const mediatoreId =
-        row.mediazionePayload.mediatore && userNameToId[row.mediazionePayload.mediatore]
-          ? userNameToId[row.mediazionePayload.mediatore]
-          : undefined;
+        (mediatoreName && userNameToId[mediatoreName]) ||
+        (mediatoreKey && userNameToId[mediatoreKey]) ||
+        undefined;
       const isCheck = row.sourceFormat === "check";
       const stato = mediatoreId ? "assegnata" : "registrata";
 
@@ -301,12 +369,16 @@ export async function importRows(
         ...(row.mediazionePayload.data_protocollo
           ? { data_protocollo: row.mediazionePayload.data_protocollo }
           : {}),
-        ...(row.mediazionePayload.esito_finale
-          ? { esito_finale: row.mediazionePayload.esito_finale }
-          : {}),
-        ...(row.mediazionePayload.data_chiusura
-          ? { data_chiusura: row.mediazionePayload.data_chiusura }
-          : {}),
+        ...(row.mediazionePayload.esito_finale_set
+          ? { esito_finale: row.mediazionePayload.esito_finale || "" }
+          : row.mediazionePayload.esito_finale
+            ? { esito_finale: row.mediazionePayload.esito_finale }
+            : {}),
+        ...(row.mediazionePayload.data_chiusura_set
+          ? { data_chiusura: row.mediazionePayload.data_chiusura || null }
+          : row.mediazionePayload.data_chiusura
+            ? { data_chiusura: row.mediazionePayload.data_chiusura }
+            : {}),
         ...(row.mediazionePayload.trasmessa_set
           ? { trasmessa: Boolean(row.mediazionePayload.trasmessa) }
           : {}),
@@ -343,59 +415,10 @@ export async function importRows(
         }
         const created = await pb.collection("mediazioni").create(mediazioneData);
         mediazioneId = created.id;
-
-        const soggettoIstanteId = await findOrCreateSoggetto(pb, row.parteIstante, {});
-
-        let avvocatoId: string | undefined;
-        const hasAvvocato =
-          row.avvocatoIstante.nome || row.avvocatoIstante.cognome || row.avvocatoIstante.codice_fiscale;
-        if (hasAvvocato) {
-          const avv = await pb.collection("avvocati").create({
-            nome: row.avvocatoIstante.nome || undefined,
-            cognome: row.avvocatoIstante.cognome || undefined,
-            codice_fiscale: row.avvocatoIstante.codice_fiscale,
-            pec: row.avvocatoIstante.pec,
-            telefono: row.avvocatoIstante.telefono,
-            indirizzo: row.avvocatoIstante.indirizzo,
-          });
-          avvocatoId = avv.id;
-        }
-
-        const addrChiamato: AddrFields = {
-          indirizzo_riga_1: row.parteChiamato.indirizzo_riga_1 || undefined,
-          indirizzo_riga_2: row.parteChiamato.indirizzo_riga_2 || undefined,
-          numero_civico: row.parteChiamato.numero_civico || undefined,
-          comune: row.parteChiamato.comune || undefined,
-          provincia: row.parteChiamato.provincia || undefined,
-          cap: row.parteChiamato.cap || undefined,
-        };
-        const soggettoChiamatoId = await findOrCreateSoggetto(pb, row.parteChiamato, addrChiamato);
-
-        const existingIstante = await pb.collection("partecipazioni").getFullList({
-          filter: `mediazione = "${mediazioneId}" && soggetto = "${soggettoIstanteId}" && istante_o_chiamato = "Istante"`,
-          limit: 1,
-        });
-        if (existingIstante.length === 0) {
-          await pb.collection("partecipazioni").create({
-            mediazione: mediazioneId,
-            soggetto: soggettoIstanteId,
-            istante_o_chiamato: "Istante",
-            avvocati: avvocatoId ? [avvocatoId] : undefined,
-          });
-        }
-
-        const existingChiamato = await pb.collection("partecipazioni").getFullList({
-          filter: `mediazione = "${mediazioneId}" && soggetto = "${soggettoChiamatoId}" && istante_o_chiamato = "Chiamato"`,
-          limit: 1,
-        });
-        if (existingChiamato.length === 0) {
-          await pb.collection("partecipazioni").create({
-            mediazione: mediazioneId,
-            soggetto: soggettoChiamatoId,
-            istante_o_chiamato: "Chiamato",
-          });
-        }
       }
+
+      // Parti: crea solo se mancanti. Se Istante/Chiamato già in DB → non toccarli.
+      await ensurePartecipazioniFromExcel(pb, mediazioneId, row);
 
       // Documenti: upsert link (istanza, cartella, adesione, chiusura)
       await upsertDocumentoLink(pb, mediazioneId, tipoRichiesta, row.mediazionePayload.link_istanza, "Richiesta di mediazione (import)");
@@ -404,7 +427,7 @@ export async function importRows(
       await upsertDocumentoLink(pb, mediazioneId, tipoChiusura, row.mediazionePayload.link_documento_chiusura, "Documento chiusura (import)");
 
       // Incontro: upsert — find the first incontro for this mediazione; update data_programmazione
-      // if changed, create if none exists
+      // if changed, create if none exists. Data-only Excel → ora default 00:00.
       const dataIncontroRaw = (row.mediazionePayload.data_incontro ?? "").toString().trim();
       const oraIncontroRaw = (row.mediazionePayload.ora_incontro ?? "").toString().trim();
       const dataProg = buildDataProgrammazioneUTC(dataIncontroRaw, oraIncontroRaw);
