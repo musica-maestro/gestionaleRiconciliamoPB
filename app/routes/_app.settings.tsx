@@ -90,6 +90,14 @@ export async function action({ request }: ActionFunctionArgs) {
 
   const { pb } = await createPB(request);
 
+  // I ruoli in sessione risalgono al login: un admin può averli cambiati nel frattempo.
+  const freshRuoli = await pb
+    .collection("users")
+    .getOne(user.id, { fields: "ruoli" })
+    .then((r) => (Array.isArray(r.ruoli) ? (r.ruoli as string[]) : r.ruoli ? [String(r.ruoli)] : []))
+    .catch(() => user.ruoli ?? []);
+  const canSwitchTo = (r: string) => freshRuoli.includes(r);
+
   try {
     const useFormData = hasAvatar || hasFirma || removeFirma;
     let updatedRecord: {
@@ -103,7 +111,7 @@ export async function action({ request }: ActionFunctionArgs) {
     if (useFormData) {
       const pbForm = new FormData();
       if (name) pbForm.append("name", name);
-      if (ruolo_corrente && user.ruoli?.includes(ruolo_corrente)) {
+      if (ruolo_corrente && canSwitchTo(ruolo_corrente)) {
         pbForm.append("ruolo_corrente", ruolo_corrente);
       }
       if (sesso === "male" || sesso === "female") {
@@ -135,7 +143,7 @@ export async function action({ request }: ActionFunctionArgs) {
     } else {
       const body: Record<string, unknown> = {};
       if (name) body.name = name;
-      if (ruolo_corrente && user.ruoli?.includes(ruolo_corrente)) {
+      if (ruolo_corrente && canSwitchTo(ruolo_corrente)) {
         body.ruolo_corrente = ruolo_corrente;
       }
       body.sesso = sesso === "male" || sesso === "female" ? sesso : "";
@@ -158,6 +166,7 @@ export async function action({ request }: ActionFunctionArgs) {
     const session = await getSession(request.headers.get("Cookie"));
     const updatedUser: PbUser = {
       ...user,
+      ruoli: freshRuoli,
       name: updatedRecord.name ?? user.name,
       ruolo_corrente: updatedRecord.ruolo_corrente ?? user.ruolo_corrente,
       ...(updatedRecord.avatar !== undefined && { avatar: updatedRecord.avatar }),
