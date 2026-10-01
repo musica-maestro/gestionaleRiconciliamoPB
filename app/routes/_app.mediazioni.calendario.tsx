@@ -2,15 +2,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useFetcher, useLoaderData, useNavigate, useSearchParams } from "@remix-run/react";
 import { json, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
 import type { MetaFunction } from "@remix-run/node";
-import { ChevronDown, ChevronLeft, ChevronRight, Download, Menu, Plus } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Download, Menu, Plus, Search, X } from "lucide-react";
 import { getCurrentRole, requireUser } from "~/lib/auth.server";
 import {
   CALENDAR_COLOR_DA_NOTIFICARE,
   CALENDAR_COLOR_NO_ESITO,
   ESITO_FINALE_COLORS,
   ESITO_FINALE_VALUES,
+  calendarColorKey,
+  calendarColorLabel,
   calendarEventColor,
   calendarEventTextColor,
+  type CalendarStatusKey,
 } from "~/lib/esito-finale";
 import { createPB } from "~/lib/pocketbase.server";
 
@@ -122,12 +125,22 @@ type CalendarEvent = {
 };
 
 /** Same priority as calendarEventColor — used to toggle legend filters. */
-function colorKeyOf(e: Pick<CalendarEvent, "esitoFinale" | "stato" | "adesione">): string {
-  const esito = e.esitoFinale.trim();
-  if (esito && esito in ESITO_FINALE_COLORS) return esito;
-  if (e.stato === "da_notificare" || e.stato === "pianificata") return "da_notificare";
-  if (!esito && e.adesione === false) return "Nessuna adesione";
-  return "senza_esito";
+function colorKeyOf(e: Pick<CalendarEvent, "esitoFinale" | "stato" | "adesione">): CalendarStatusKey {
+  return calendarColorKey({
+    esitoFinale: e.esitoFinale,
+    stato: e.stato,
+    adesione: e.adesione,
+  });
+}
+
+function statusLabelOf(e: Pick<CalendarEvent, "esitoFinale" | "stato" | "adesione" | "fase">): string {
+  const key = colorKeyOf(e);
+  if (key === "da_notificare" || key === "senza_esito") {
+    return calendarColorLabel(key);
+  }
+  if (e.esitoFinale.trim()) return e.esitoFinale.trim();
+  if (e.fase !== "altro") return FASE_LABELS_SINGULAR[e.fase];
+  return calendarColorLabel(key);
 }
 
 type LaidOutEvent = CalendarEvent & { col: number; cols: number };
@@ -279,11 +292,10 @@ function rangeForView(view: View, anchor: Date): { fromYmd: string; toYmd: strin
 }
 
 function eventTooltip(e: CalendarEvent) {
-  const faseLabel = e.fase === "altro" ? null : FASE_LABELS_SINGULAR[e.fase];
   return [
     `${e.timeLabel}–${e.endTimeLabel}`,
     e.rgm,
-    e.esitoFinale || faseLabel,
+    statusLabelOf(e),
     e.parte && `Parte: ${e.parte}`,
     e.controparte && `Controparte: ${e.controparte}`,
     e.avvocati && `Avvocati: ${e.avvocati}`,
@@ -835,7 +847,7 @@ function DayAgendaPanel({ events }: { events: CalendarEvent[] }) {
       {events.map((e) => {
         const color = eventColor(e);
         const meta = [
-          e.esitoFinale || (e.fase !== "altro" && FASE_LABELS_SINGULAR[e.fase]),
+          statusLabelOf(e),
           e.parte && `Istante ${e.parte}`,
           e.controparte && `Chiamato ${e.controparte}`,
           e.avvocati && `Avvocati ${e.avvocati}`,
@@ -876,6 +888,114 @@ function DayAgendaPanel({ events }: { events: CalendarEvent[] }) {
       })}
     </ul>
   );
+}
+
+/** Mobile week: agenda grouped by day instead of a cramped 5-column grid. */
+function WeekAgendaPanel({
+  days,
+  byDay,
+  todayKey,
+  onSelectDay,
+}: {
+  days: { key: string; date: Date; label: string }[];
+  byDay: Record<string, CalendarEvent[]>;
+  todayKey: string;
+  onSelectDay: (key: string) => void;
+}) {
+  return (
+    <div className="h-full overflow-y-auto">
+      {days.map((d) => {
+        const dayEvents = byDay[d.key] || [];
+        const isToday = d.key === todayKey;
+        return (
+          <section key={d.key} className="border-b border-[var(--cal-border)]">
+            <button
+              type="button"
+              className="sticky top-0 z-10 flex w-full items-center gap-2 bg-[var(--cal-bg)] px-3 py-2 text-left border-b border-[var(--cal-border)]"
+              onClick={() => onSelectDay(d.key)}
+            >
+              <span
+                className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium tabular-nums ${
+                  isToday
+                    ? "bg-[var(--cal-accent)] text-[var(--cal-accent-on)]"
+                    : "bg-[var(--cal-hover)] text-[var(--cal-text)]"
+                }`}
+              >
+                {d.date.getDate()}
+              </span>
+              <span className="text-sm font-medium capitalize text-[var(--cal-text)]">
+                {d.date.toLocaleDateString("it-IT", { weekday: "long" })}
+              </span>
+              <span className="ml-auto text-xs text-[var(--cal-muted)]">{dayEvents.length}</span>
+            </button>
+            {dayEvents.length === 0 ? (
+              <p className="px-3 py-2 text-xs text-[var(--cal-muted)]">Nessun incontro</p>
+            ) : (
+              <ul className="divide-y divide-[var(--cal-border)]">
+                {dayEvents.map((e) => {
+                  const color = eventColor(e);
+                  const meta = [
+                    statusLabelOf(e),
+                    e.parte && `Istante ${e.parte}`,
+                    e.controparte && `Chiamato ${e.controparte}`,
+                    e.mediatoreName && `Mediatore ${e.mediatoreName}`,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ");
+                  return (
+                    <li key={e.id}>
+                      <Link
+                        to={`/mediazioni/${e.mediazioneId}?tab=incontri`}
+                        className="block px-3 py-2.5 hover:bg-[var(--cal-hover)]"
+                      >
+                        <div className="flex items-start gap-2.5">
+                          <span
+                            className="mt-1 h-2.5 w-2.5 rounded-sm shrink-0"
+                            style={{ backgroundColor: color }}
+                            aria-hidden
+                          />
+                          <div className="min-w-0 flex-1 text-sm leading-snug">
+                            <div className="truncate">
+                              <span className="font-semibold tabular-nums text-[var(--cal-text)]">
+                                {e.timeLabel}–{e.endTimeLabel}
+                              </span>
+                              <span className="mx-1.5 font-medium text-[var(--cal-accent)]">
+                                RGM {e.rgm}
+                              </span>
+                              {e.oggetto ? (
+                                <span className="text-[var(--cal-text)] opacity-80">{e.oggetto}</span>
+                              ) : null}
+                            </div>
+                            {meta ? (
+                              <div className="mt-0.5 truncate text-[12px] text-[var(--cal-muted)]">
+                                {meta}
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function useIsNarrow(breakpointPx = 1024) {
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpointPx - 1}px)`);
+    const apply = () => setNarrow(mq.matches);
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, [breakpointPx]);
+  return narrow;
 }
 
 function TimeGrid({
@@ -1079,11 +1199,17 @@ export default function CalendarioMediazioniPage() {
   const { events, view, date, canFilterMediatore, mediatori, adesioneFilter, faseFilter } =
     useLoaderData<typeof loader>();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const isNarrow = useIsNarrow(1024);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [optimisticEvents, setOptimisticEvents] = useState<CalendarEvent[] | null>(null);
   const fetcher = useFetcher<typeof action>();
   const nowMs = useNowTick(view === "week" || view === "day");
+
+  // Desktop: open filters sidebar by default; mobile: keep closed (drawer).
+  useEffect(() => {
+    setSidebarOpen(!isNarrow);
+  }, [isNarrow]);
 
   useEffect(() => {
     setOptimisticEvents(null);
@@ -1145,6 +1271,26 @@ export default function CalendarioMediazioniPage() {
     });
   }, [displayEvents, hiddenIds, hiddenColors, canFilterMediatore]);
 
+  const searchQuery = (searchParams.get("q") ?? "").trim().toLowerCase();
+
+  const searchedEvents = useMemo(() => {
+    if (!searchQuery) return visibleEvents;
+    return visibleEvents.filter((e) => {
+      const haystack = [
+        e.rgm,
+        e.oggetto,
+        e.parte,
+        e.controparte,
+        e.avvocati,
+        e.mediatoreName,
+        statusLabelOf(e),
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(searchQuery);
+    });
+  }, [visibleEvents, searchQuery]);
+
   const updateParams = (patch: Record<string, string | null>) => {
     const next = new URLSearchParams(searchParams);
     for (const [k, v] of Object.entries(patch)) {
@@ -1160,6 +1306,23 @@ export default function CalendarioMediazioniPage() {
     else next.add(id);
     updateParams({ hide: next.size ? [...next].join(",") : null });
   };
+
+  const setMediatoreOnly = (id: string | null) => {
+    if (!id) {
+      updateParams({ hide: null });
+      return;
+    }
+    const hide = mediatori.map((m) => m.id).filter((mid) => mid !== id);
+    updateParams({ hide: hide.length ? hide.join(",") : null });
+  };
+
+  const mediatoreSelectValue = useMemo(() => {
+    if (!canFilterMediatore || mediatori.length === 0) return "";
+    const visible = mediatori.filter((m) => !hiddenIds.has(m.id));
+    if (visible.length === mediatori.length || visible.length === 0) return "";
+    if (visible.length === 1) return visible[0].id;
+    return "__multi__";
+  }, [canFilterMediatore, mediatori, hiddenIds]);
 
   const toggleColor = (id: string) => {
     const next = new Set(hiddenColors);
@@ -1211,7 +1374,7 @@ export default function CalendarioMediazioniPage() {
 
   const byDay = useMemo(() => {
     const map: Record<string, CalendarEvent[]> = {};
-    for (const e of visibleEvents) {
+    for (const e of searchedEvents) {
       if (!map[e.dayKey]) map[e.dayKey] = [];
       map[e.dayKey].push(e);
     }
@@ -1219,7 +1382,7 @@ export default function CalendarioMediazioniPage() {
       map[key].sort((a, b) => a.startMs - b.startMs || a.rgm.localeCompare(b.rgm));
     }
     return map;
-  }, [visibleEvents]);
+  }, [searchedEvents]);
 
   const weekDays = useMemo(() => {
     const start = startOfWeekMonday(anchor);
@@ -1271,185 +1434,240 @@ export default function CalendarioMediazioniPage() {
   }, [anchor, searchParams]);
 
   const viewLabel = view === "day" ? "Giorno" : view === "week" ? "Settimana" : "Mese";
+  const closeSidebarIfNarrow = () => {
+    if (isNarrow) setSidebarOpen(false);
+  };
 
-  return (
-    <div className="flex h-[calc(100vh-3.5rem)] w-full bg-[var(--cal-bg)] text-[var(--cal-text)] overflow-hidden">
-      {/* Left sidebar */}
-      <aside
-        className={`shrink-0 flex flex-col border-r border-[var(--cal-border)] transition-[width] ${
-          sidebarOpen ? "w-[260px]" : "w-0 overflow-hidden border-0"
-        }`}
-      >
-        <div className="p-3">
-          <Link
-            to="/mediazioni/pianifica"
-            className="inline-flex items-center gap-2 rounded-2xl bg-[var(--cal-hover)] hover:bg-[var(--cal-border)] pl-3 pr-5 py-3 text-sm font-medium text-[var(--cal-text)] shadow-md"
+  const sidebarInner = (
+    <>
+      <div className="p-3 flex items-center gap-2">
+        <Link
+          to="/mediazioni/pianifica"
+          className="inline-flex flex-1 items-center gap-2 rounded-2xl bg-[var(--cal-hover)] hover:bg-[var(--cal-border)] pl-3 pr-5 py-3 text-sm font-medium text-[var(--cal-text)] shadow-md"
+          onClick={closeSidebarIfNarrow}
+        >
+          <Plus className="h-5 w-5 text-[var(--cal-accent)]" />
+          Pianifica incontri
+        </Link>
+        {isNarrow ? (
+          <button
+            type="button"
+            className="p-2 rounded-full hover:bg-[var(--cal-hover)]"
+            aria-label="Chiudi filtri"
+            onClick={() => setSidebarOpen(false)}
           >
-            <Plus className="h-5 w-5 text-[var(--cal-accent)]" />
-            Pianifica incontri
-          </Link>
-        </div>
+            <ChevronLeft className="h-5 w-5" />
+          </button>
+        ) : null}
+      </div>
 
-        <MiniMonth
-          anchor={miniAnchor}
-          selectedKey={date}
-          onSelect={(key) => updateParams({ date: key, view: view === "month" ? "day" : view })}
-          onShiftMonth={(delta) => {
-            const d = new Date(miniAnchor.getFullYear(), miniAnchor.getMonth() + delta, 1);
-            updateParams({
-              mini: `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`,
-            });
-          }}
-        />
+      <MiniMonth
+        anchor={miniAnchor}
+        selectedKey={date}
+        onSelect={(key) => {
+          updateParams({ date: key, view: view === "month" ? "day" : view });
+          closeSidebarIfNarrow();
+        }}
+        onShiftMonth={(delta) => {
+          const d = new Date(miniAnchor.getFullYear(), miniAnchor.getMonth() + delta, 1);
+          updateParams({
+            mini: `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`,
+          });
+        }}
+      />
 
-        <div className="px-4 pt-2 pb-1 text-xs font-medium text-[var(--cal-muted)]">
-          Filtri
-        </div>
-        <div className="px-3 pb-2 space-y-2">
+      <div className="px-4 pt-2 pb-1 text-xs font-medium text-[var(--cal-muted)]">
+        Filtri
+      </div>
+      <div className="px-3 pb-2 space-y-2">
+        {canFilterMediatore ? (
           <select
             className="w-full rounded-lg border border-[var(--cal-border)] bg-[var(--cal-bg)] px-2 py-1.5 text-sm text-[var(--cal-text)]"
-            value={adesioneFilter}
-            onChange={(e) =>
-              updateParams({ adesione: e.target.value || null })
-            }
-            aria-label="Filtra per adesione"
+            value={mediatoreSelectValue === "__multi__" ? "" : mediatoreSelectValue}
+            onChange={(e) => setMediatoreOnly(e.target.value || null)}
+            aria-label="Filtra per mediatore"
           >
-            <option value="">Adesione: tutte</option>
-            <option value="si">Solo con adesione</option>
-            <option value="no">Senza adesione</option>
+            <option value="">
+              {mediatoreSelectValue === "__multi__"
+                ? "Mediatore: selezione multipla"
+                : "Mediatore: tutti"}
+            </option>
+            {mediatori.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
           </select>
-          <select
-            className="w-full rounded-lg border border-[var(--cal-border)] bg-[var(--cal-bg)] px-2 py-1.5 text-sm text-[var(--cal-text)]"
-            value={faseFilter}
-            onChange={(e) => updateParams({ fase: e.target.value || null })}
-            aria-label="Filtra per stato mediazione"
+        ) : null}
+        <select
+          className="w-full rounded-lg border border-[var(--cal-border)] bg-[var(--cal-bg)] px-2 py-1.5 text-sm text-[var(--cal-text)]"
+          value={adesioneFilter}
+          onChange={(e) =>
+            updateParams({ adesione: e.target.value || null })
+          }
+          aria-label="Filtra per adesione"
+        >
+          <option value="">Adesione: tutte</option>
+          <option value="si">Solo con adesione</option>
+          <option value="no">Senza adesione</option>
+        </select>
+        <select
+          className="w-full rounded-lg border border-[var(--cal-border)] bg-[var(--cal-bg)] px-2 py-1.5 text-sm text-[var(--cal-text)]"
+          value={faseFilter}
+          onChange={(e) => updateParams({ fase: e.target.value || null })}
+          aria-label="Filtra per stato mediazione"
+        >
+          <option value="">Stato: tutte</option>
+          <option value="pianificata">Pianificate</option>
+          <option value="notificata">Notificate</option>
+          <option value="chiusa">Chiuse</option>
+        </select>
+        <div className="flex items-center gap-2 pt-1">
+          <button
+            type="button"
+            className="flex-1 rounded-md border border-[var(--cal-border)] px-2 py-1.5 text-xs font-medium text-[var(--cal-text)] hover:bg-[var(--cal-hover)]"
+            onClick={selectAllColors}
           >
-            <option value="">Stato: tutte</option>
-            <option value="pianificata">Pianificate</option>
-            <option value="notificata">Notificate</option>
-            <option value="chiusa">Chiuse</option>
-          </select>
-          <div className="flex items-center gap-2 pt-1">
-            <button
-              type="button"
-              className="flex-1 rounded-md border border-[var(--cal-border)] px-2 py-1.5 text-xs font-medium text-[var(--cal-text)] hover:bg-[var(--cal-hover)]"
-              onClick={selectAllColors}
-            >
-              Seleziona tutti
-            </button>
-            <button
-              type="button"
-              className="flex-1 rounded-md border border-[var(--cal-border)] px-2 py-1.5 text-xs font-medium text-[var(--cal-text)] hover:bg-[var(--cal-hover)]"
-              onClick={resetColorFilters}
-            >
-              Reset
-            </button>
-          </div>
-          <div className="flex flex-col gap-0.5 pt-1 max-h-52 overflow-y-auto">
-            {COLOR_LEGEND.map((item) => {
-              const checked = !hiddenColors.has(item.id);
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`flex w-full items-center gap-2.5 rounded-lg px-1.5 py-1.5 text-left hover:bg-[var(--cal-hover)] ${
-                    checked ? "opacity-100" : "opacity-45"
-                  }`}
-                  onClick={() => toggleColor(item.id)}
-                  aria-pressed={checked}
-                  aria-label={`${checked ? "Nascondi" : "Mostra"} ${item.label}`}
-                >
-                  <span
-                    className="flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px] border-2"
-                    style={{
-                      backgroundColor: checked ? item.color : "transparent",
-                      borderColor: item.color,
-                    }}
-                    aria-hidden
-                  >
-                    {checked && (
-                      <svg
-                        viewBox="0 0 16 16"
-                        className="h-2.5 w-2.5"
-                        style={{
-                          fill: calendarEventTextColor(item.color),
-                        }}
-                      >
-                        <path d="M6.2 11.4 2.8 8l1.1-1.1 2.3 2.3 5-5L12.3 5.3z" />
-                      </svg>
-                    )}
-                  </span>
-                  <span className="text-sm leading-snug text-[var(--cal-text)]">{item.label}</span>
-                </button>
-              );
-            })}
-          </div>
-          <p className="pt-2 text-xs leading-snug text-[var(--cal-muted)]">
-            Trascina un incontro sullo slot: sullo stesso orario di un altro restano affiancati.
-          </p>
+            Seleziona tutti
+          </button>
+          <button
+            type="button"
+            className="flex-1 rounded-md border border-[var(--cal-border)] px-2 py-1.5 text-xs font-medium text-[var(--cal-text)] hover:bg-[var(--cal-hover)]"
+            onClick={resetColorFilters}
+          >
+            Reset
+          </button>
         </div>
-
-        <div className="px-4 pt-2 pb-1 text-xs font-medium text-[var(--cal-muted)]">
-          {canFilterMediatore ? "Mediatori" : "Il mio calendario"}
-        </div>
-        <div className="flex-1 overflow-y-auto px-2 pb-4 space-y-0.5">
-          {mediatori.map((m) => {
-            const checked = !hiddenIds.has(m.id);
-            const color = colorOf(m.colorIndex);
+        <div className="flex flex-col gap-0.5 pt-1 max-h-52 overflow-y-auto">
+          {COLOR_LEGEND.map((item) => {
+            const checked = !hiddenColors.has(item.id);
             return (
               <button
-                key={m.id}
+                key={item.id}
                 type="button"
-                className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-[var(--cal-hover)] disabled:cursor-default"
-                onClick={() => {
-                  if (!canFilterMediatore) return;
-                  toggleMediatore(m.id);
-                }}
-                disabled={!canFilterMediatore}
+                className={`flex w-full items-center gap-2.5 rounded-lg px-1.5 py-1.5 text-left hover:bg-[var(--cal-hover)] ${
+                  checked ? "opacity-100" : "opacity-45"
+                }`}
+                onClick={() => toggleColor(item.id)}
+                aria-pressed={checked}
+                aria-label={`${checked ? "Nascondi" : "Mostra"} ${item.label}`}
               >
                 <span
-                  className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[3px] border-2"
+                  className="flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px] border-2"
                   style={{
-                    backgroundColor: checked ? color : "transparent",
-                    borderColor: color,
+                    backgroundColor: checked ? item.color : "transparent",
+                    borderColor: item.color,
                   }}
                   aria-hidden
                 >
                   {checked && (
-                    <svg viewBox="0 0 16 16" className="h-3 w-3 fill-white">
+                    <svg
+                      viewBox="0 0 16 16"
+                      className="h-2.5 w-2.5"
+                      style={{
+                        fill: calendarEventTextColor(item.color),
+                      }}
+                    >
                       <path d="M6.2 11.4 2.8 8l1.1-1.1 2.3 2.3 5-5L12.3 5.3z" />
                     </svg>
                   )}
                 </span>
-                <span className="text-sm truncate text-[var(--cal-text)]">{m.name}</span>
+                <span className="text-sm leading-snug text-[var(--cal-text)]">{item.label}</span>
               </button>
             );
           })}
         </div>
+        <p className="pt-2 text-xs leading-snug text-[var(--cal-muted)] hidden lg:block">
+          Trascina un incontro sullo slot: sullo stesso orario di un altro restano affiancati.
+        </p>
+      </div>
 
-        <div className="px-3 pb-3">
-          <a
-            href="/mediazioni/calendario/ics"
-            className="inline-flex items-center gap-2 text-xs text-[var(--cal-muted)] hover:text-[var(--cal-text)]"
-          >
-            <Download className="h-3.5 w-3.5" />
-            Esporta ICS
-          </a>
-        </div>
+      <div className="px-4 pt-2 pb-1 text-xs font-medium text-[var(--cal-muted)]">
+        {canFilterMediatore ? "Mediatori" : "Il mio calendario"}
+      </div>
+      <div className="flex-1 overflow-y-auto px-2 pb-4 space-y-0.5">
+        {mediatori.map((m) => {
+          const checked = !hiddenIds.has(m.id);
+          const color = colorOf(m.colorIndex);
+          return (
+            <button
+              key={m.id}
+              type="button"
+              className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-[var(--cal-hover)] disabled:cursor-default"
+              onClick={() => {
+                if (!canFilterMediatore) return;
+                toggleMediatore(m.id);
+              }}
+              disabled={!canFilterMediatore}
+            >
+              <span
+                className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[3px] border-2"
+                style={{
+                  backgroundColor: checked ? color : "transparent",
+                  borderColor: color,
+                }}
+                aria-hidden
+              >
+                {checked && (
+                  <svg viewBox="0 0 16 16" className="h-3 w-3 fill-white">
+                    <path d="M6.2 11.4 2.8 8l1.1-1.1 2.3 2.3 5-5L12.3 5.3z" />
+                  </svg>
+                )}
+              </span>
+              <span className="text-sm truncate text-[var(--cal-text)]">{m.name}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="px-3 pb-3">
+        <a
+          href="/mediazioni/calendario/ics"
+          className="inline-flex items-center gap-2 text-xs text-[var(--cal-muted)] hover:text-[var(--cal-text)]"
+        >
+          <Download className="h-3.5 w-3.5" />
+          Esporta ICS
+        </a>
+      </div>
+    </>
+  );
+
+  return (
+    <div className="relative flex h-[calc(100vh-3.5rem)] w-full bg-[var(--cal-bg)] text-[var(--cal-text)] overflow-hidden">
+      {isNarrow && sidebarOpen ? (
+        <button
+          type="button"
+          className="fixed inset-0 z-40 bg-black/40"
+          aria-label="Chiudi filtri"
+          onClick={() => setSidebarOpen(false)}
+        />
+      ) : null}
+
+      <aside
+        className={
+          isNarrow
+            ? `fixed inset-y-0 left-0 z-50 flex w-[min(100%,300px)] flex-col border-r border-[var(--cal-border)] bg-[var(--cal-bg)] shadow-xl transition-transform duration-200 ${
+                sidebarOpen ? "translate-x-0" : "-translate-x-full"
+              }`
+            : `shrink-0 flex flex-col border-r border-[var(--cal-border)] transition-[width] ${
+                sidebarOpen ? "w-[260px]" : "w-0 overflow-hidden border-0"
+              }`
+        }
+      >
+        {sidebarInner}
       </aside>
 
-      {/* Main */}
       <div className="flex-1 min-w-0 flex flex-col">
         {actionError ? (
           <div className="shrink-0 px-3 py-1.5 text-sm bg-red-50 text-red-700 border-b border-red-200">
             {actionError}
           </div>
         ) : null}
-        <header className="flex flex-wrap items-center gap-1 sm:gap-2 px-2 sm:px-3 h-14 shrink-0 border-b border-[var(--cal-border)]">
+        <header className="flex flex-wrap items-center gap-1 sm:gap-2 px-2 sm:px-3 min-h-14 py-1.5 shrink-0 border-b border-[var(--cal-border)]">
           <button
             type="button"
             className="p-2 rounded-full hover:bg-[var(--cal-hover)] text-[var(--cal-text)]"
-            aria-label="Menu"
+            aria-label="Filtri e mediatori"
             onClick={() => setSidebarOpen((v) => !v)}
           >
             <Menu className="h-5 w-5" />
@@ -1459,7 +1677,7 @@ export default function CalendarioMediazioniPage() {
 
           <button
             type="button"
-            className="ml-1 rounded-full border border-[var(--cal-border)] px-4 py-1.5 text-sm font-medium hover:bg-[var(--cal-hover)]"
+            className="ml-1 rounded-full border border-[var(--cal-border)] px-3 sm:px-4 py-1.5 text-sm font-medium hover:bg-[var(--cal-hover)]"
             onClick={() => updateParams({ date: todayKey })}
           >
             Oggi
@@ -1482,11 +1700,51 @@ export default function CalendarioMediazioniPage() {
             <ChevronRight className="h-5 w-5" />
           </button>
 
-          <h2 className="text-xl sm:text-2xl font-normal capitalize text-[var(--cal-text)] ml-1 truncate">
+          <h2 className="text-base sm:text-2xl font-normal capitalize text-[var(--cal-text)] ml-1 truncate max-w-[40vw] sm:max-w-none">
             {headerLabel}
           </h2>
 
           <div className="flex-1" />
+
+          <label className="relative flex items-center min-w-0 flex-1 sm:flex-none sm:w-56 max-w-full order-last sm:order-none basis-full sm:basis-auto mt-1 sm:mt-0">
+            <Search className="pointer-events-none absolute left-2.5 h-4 w-4 text-[var(--cal-muted)]" />
+            <input
+              type="search"
+              className="w-full rounded-lg border border-[var(--cal-border)] bg-[var(--cal-bg)] py-1.5 pl-8 pr-8 text-sm text-[var(--cal-text)] placeholder:text-[var(--cal-muted)]"
+              placeholder="Cerca RGM, parti…"
+              value={searchParams.get("q") ?? ""}
+              onChange={(e) => updateParams({ q: e.target.value || null })}
+              aria-label="Cerca nel calendario"
+            />
+            {(searchParams.get("q") ?? "") && (
+              <button
+                type="button"
+                className="absolute right-1.5 p-1 rounded-full hover:bg-[var(--cal-hover)] text-[var(--cal-muted)]"
+                aria-label="Pulisci ricerca"
+                onClick={() => updateParams({ q: null })}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </label>
+
+          {canFilterMediatore ? (
+            <select
+              className="max-w-[9.5rem] sm:max-w-[14rem] truncate rounded-lg border border-[var(--cal-border)] bg-[var(--cal-bg)] px-2 py-1.5 text-sm text-[var(--cal-text)]"
+              value={mediatoreSelectValue === "__multi__" ? "" : mediatoreSelectValue}
+              onChange={(e) => setMediatoreOnly(e.target.value || null)}
+              aria-label="Filtra per mediatore"
+            >
+              <option value="">
+                {mediatoreSelectValue === "__multi__" ? "Più mediatori" : "Tutti i mediatori"}
+              </option>
+              {mediatori.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+          ) : null}
 
           <div className="relative">
             <button
@@ -1536,10 +1794,10 @@ export default function CalendarioMediazioniPage() {
         <div className="flex-1 min-h-0 overflow-hidden">
           {view === "day" && (
             <div className="h-full flex flex-col lg:flex-row min-h-0">
-              <div className="flex-1 min-w-0 min-h-0 overflow-hidden basis-[55%] lg:basis-auto">
+              <div className="hidden lg:block flex-1 min-w-0 min-h-0 overflow-hidden">
                 <TimeGrid
                   days={dayDays}
-                  events={visibleEvents}
+                  events={searchedEvents}
                   density="day"
                   nowMs={nowMs}
                   onSelectDay={() => {}}
@@ -1547,9 +1805,9 @@ export default function CalendarioMediazioniPage() {
                   busy={busy}
                 />
               </div>
-              <aside className="w-full lg:max-w-[400px] shrink-0 border-t lg:border-t-0 lg:border-l border-[var(--cal-border)] flex flex-col min-h-0 basis-[45%] lg:basis-auto lg:h-full max-h-[45vh] lg:max-h-none">
+              <aside className="w-full lg:max-w-[400px] flex-1 lg:flex-none shrink-0 lg:border-l border-[var(--cal-border)] flex flex-col min-h-0 lg:h-full">
                 <div className="px-4 py-3 border-b border-[var(--cal-border)] text-sm font-medium text-[var(--cal-text)] shrink-0">
-                  Dettagli giornata
+                  {isNarrow ? "Agenda" : "Dettagli giornata"}
                   <span className="ml-2 text-[var(--cal-muted)] font-normal">
                     {(byDay[date] || []).length}
                   </span>
@@ -1562,15 +1820,24 @@ export default function CalendarioMediazioniPage() {
           )}
 
           {view === "week" && (
-            <TimeGrid
-              days={weekDays}
-              events={visibleEvents}
-              density="week"
-              nowMs={nowMs}
-              onSelectDay={(key) => updateParams({ view: "day", date: key })}
-              onReschedule={handleReschedule}
-              busy={busy}
-            />
+            isNarrow ? (
+              <WeekAgendaPanel
+                days={weekDays}
+                byDay={byDay}
+                todayKey={todayKey}
+                onSelectDay={(key) => updateParams({ view: "day", date: key })}
+              />
+            ) : (
+              <TimeGrid
+                days={weekDays}
+                events={searchedEvents}
+                density="week"
+                nowMs={nowMs}
+                onSelectDay={(key) => updateParams({ view: "day", date: key })}
+                onReschedule={handleReschedule}
+                busy={busy}
+              />
+            )
           )}
 
           {view === "month" && (
@@ -1589,12 +1856,12 @@ export default function CalendarioMediazioniPage() {
                 {monthCells.map((cell) => {
                   const dayEvents = byDay[cell.key] || [];
                   const isToday = cell.key === todayKey;
-                  const maxVisible = 4;
+                  const maxVisible = isNarrow ? 2 : 4;
                   const overflow = dayEvents.length - maxVisible;
                   return (
                     <div
                       key={cell.key}
-                      className="min-h-[5.5rem] border-b border-r border-[var(--cal-border)] p-1"
+                      className="min-h-[4.5rem] sm:min-h-[5.5rem] border-b border-r border-[var(--cal-border)] p-0.5 sm:p-1"
                     >
                       <button
                         type="button"
@@ -1621,7 +1888,9 @@ export default function CalendarioMediazioniPage() {
                               className="h-1.5 w-1.5 rounded-full shrink-0"
                               style={{ backgroundColor: eventColor(e) }}
                             />
-                            <span className="tabular-nums text-[var(--cal-muted)]">{e.timeLabel}</span>
+                            <span className="tabular-nums text-[var(--cal-muted)] hidden sm:inline">
+                              {e.timeLabel}
+                            </span>
                             <span className="truncate text-[var(--cal-text)]">{e.rgm}</span>
                           </Link>
                         ))}
@@ -1631,7 +1900,7 @@ export default function CalendarioMediazioniPage() {
                             className="w-full text-left px-1 text-[11px] text-[var(--cal-muted)] hover:bg-[var(--cal-hover)] rounded"
                             onClick={() => updateParams({ view: "day", date: cell.key })}
                           >
-                            altri {overflow}
+                            +{overflow}
                           </button>
                         )}
                       </div>

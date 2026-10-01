@@ -141,8 +141,61 @@ function capitalizeFirstRestLower(s: string | undefined): string {
   return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
 }
 
+/**
+ * Normalizza CF / P.IVA da Excel.
+ * - toglie spazi e punteggiatura finale (es. "…H501N)" o "…E682T.")
+ * - P.IVA con prefisso "IT" → 11 cifre
+ * - P.IVA numerica con zeri iniziali persi da Excel (9–10 cifre) → 11 cifre
+ * Ritorna "" se non è un CF (16) o P.IVA (11) plausibile.
+ */
+export function normalizeCodiceFiscale(raw: string | undefined | null): string {
+  let v = String(raw ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!v) return "";
+  if (/^IT\d{11}$/.test(v)) v = v.slice(2);
+  if (/^\d{9,10}$/.test(v)) v = v.padStart(11, "0");
+  if (v.length === 16 || /^\d{11}$/.test(v)) return v;
+  return "";
+}
+
+export type ImportParte = {
+  tipo: "Fisica";
+  nome: string;
+  cognome: string;
+  codice_fiscale: string;
+  /** Nome completo così come in Excel (per persone giuridiche / match). */
+  full?: string;
+};
+
+/** Divide una cella multi-parte ("A; B; C") in voci. */
+function splitList(raw: string): string[] {
+  return raw
+    .split(";")
+    .map((s) => s.trim())
+    .filter((s) => s && s !== "-");
+}
+
+/** Abbina nomi e CF (stesso ordine nelle due colonne). */
+function buildParti(namesRaw: string, cfsRaw: string): ImportParte[] {
+  const names = splitList(namesRaw);
+  const cfs = cfsRaw.split(";").map((s) => s.trim());
+  return names.map((full, i) => {
+    const { nome, cognome } = splitNomeCognome(full);
+    return {
+      tipo: "Fisica" as const,
+      nome: nome || full,
+      cognome,
+      codice_fiscale: normalizeCodiceFiscale(cfs[i]),
+      full,
+    };
+  });
+}
+
 export interface ImportRow {
   index: number;
+  /** Tutte le parti istanti della riga (celle multi-parte separate da ";"). */
+  istanti?: ImportParte[];
+  /** Tutte le parti chiamate della riga (celle multi-parte separate da ";"). */
+  chiamati?: ImportParte[];
   /** true = formato Check Mediazioni (aggiornamento), false = Tracciato Organismo */
   sourceFormat?: "check" | "tracciato";
   mediazionePayload: {
@@ -302,7 +355,7 @@ function mapCheckRowsToImport(
   trasmessiSheetPresent: boolean
 ): ImportRow[] {
   return jsonRows
-    .map((row, i) => {
+    .map((row, i): ImportRow | null => {
       const rgm = getStr(row, "RGM");
       if (!rgm || rgm.toLowerCase() === "rgm") {
         return null;
@@ -320,11 +373,8 @@ function mapCheckRowsToImport(
       const rawOraIncontro = row["Ora incontro"] ?? getStr(row, "Ora incontro") ?? "";
       const oraIncontro = formatExcelTime(rawOraIncontro);
 
-      const istanteFull = firstPerson(getStr(row, "Istante"));
-      const { nome: nomeIstante, cognome: cognomeIstante } = splitNomeCognome(istanteFull);
-
-      const chiamatoFull = firstPerson(getStr(row, "Chiamato"));
-      const { nome: nomeChiamato, cognome: cognomeChiamato } = splitNomeCognome(chiamatoFull);
+      const istanti = buildParti(getStr(row, "Istante"), getStr(row, "CF Istante"));
+      const chiamati = buildParti(getStr(row, "Chiamato"), getStr(row, "CF Chiamato"));
 
       const avvFull = firstPerson(
         getStr(row, "Avvocato istante") ||
@@ -374,15 +424,19 @@ function mapCheckRowsToImport(
         ora_incontro: oraIncontro,
       };
 
+      const firstIstante = istanti[0];
+      const firstChiamato = chiamati[0];
       return {
         index: i + 1,
         sourceFormat: "check" as const,
         mediazionePayload,
+        istanti,
+        chiamati,
         parteIstante: {
           tipo: "Fisica" as const,
-          nome: nomeIstante || istanteFull,
-          cognome: cognomeIstante,
-          codice_fiscale: getStr(row, "CF Istante"),
+          nome: firstIstante?.nome ?? "",
+          cognome: firstIstante?.cognome ?? "",
+          codice_fiscale: firstIstante?.codice_fiscale ?? "",
         },
         avvocatoIstante: {
           nome: nomeAvv || avvFull,
@@ -390,9 +444,9 @@ function mapCheckRowsToImport(
         },
         parteChiamato: {
           ...emptyParteChiamato(),
-          nome: nomeChiamato || chiamatoFull,
-          cognome: cognomeChiamato,
-          codice_fiscale: getStr(row, "CF Chiamato"),
+          nome: firstChiamato?.nome ?? "",
+          cognome: firstChiamato?.cognome ?? "",
+          codice_fiscale: firstChiamato?.codice_fiscale ?? "",
         },
       };
     })

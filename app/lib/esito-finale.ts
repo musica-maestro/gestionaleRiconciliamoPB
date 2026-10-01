@@ -22,6 +22,29 @@ export const ESITO_FINALE_COLORS: Record<EsitoFinale, string> = {
 export const CALENDAR_COLOR_DA_NOTIFICARE = "#facc15"; // yellow
 export const CALENDAR_COLOR_NO_ESITO = "#d1d5db"; // light gray
 
+/** Chiavi legenda / filtro colore calendario (oltre agli esiti finali). */
+export const CALENDAR_STATUS_KEYS = ["da_notificare", "senza_esito"] as const;
+export type CalendarStatusKey = (typeof CALENDAR_STATUS_KEYS)[number] | EsitoFinale;
+
+export function calendarColorKey(opts: {
+  esitoFinale?: string | null;
+  stato?: string | null;
+  adesione?: boolean;
+}): CalendarStatusKey {
+  const esito = String(opts.esitoFinale ?? "").trim();
+  if (esito && esito in ESITO_FINALE_COLORS) {
+    return esito as EsitoFinale;
+  }
+  const stato = String(opts.stato ?? "");
+  if (stato === "da_notificare" || stato === "pianificata") {
+    return "da_notificare";
+  }
+  if (!esito && opts.adesione === false) {
+    return "Nessuna adesione";
+  }
+  return "senza_esito";
+}
+
 /** Valori stato raccomandata sulle convocazioni (derivati dall'esito). */
 export const STATO_RACCOMANDATA_VALUES = ["Consegnata", "Non consegnabile"] as const;
 
@@ -103,19 +126,22 @@ export function normalizeEsitoFinale(raw: string): string {
 export const ESITO_FINALE_FORM_OPTIONS = ["", ...ESITO_FINALE_VALUES] as const;
 
 /** Colore evento calendario da esito / stato / adesione. */
-export function calendarEventColor(opts: { esitoFinale?: string | null; stato?: string | null; adesione?: boolean }): string {
-  const esito = String(opts.esitoFinale ?? "").trim();
-  if (esito && esito in ESITO_FINALE_COLORS) {
-    return ESITO_FINALE_COLORS[esito as EsitoFinale];
-  }
-  const stato = String(opts.stato ?? "");
-  if (stato === "da_notificare" || stato === "pianificata") {
-    return CALENDAR_COLOR_DA_NOTIFICARE;
-  }
-  if (!esito && opts.adesione === false) {
-    return ESITO_FINALE_COLORS["Nessuna adesione"];
-  }
-  return CALENDAR_COLOR_NO_ESITO;
+export function calendarEventColor(opts: {
+  esitoFinale?: string | null;
+  stato?: string | null;
+  adesione?: boolean;
+}): string {
+  const key = calendarColorKey(opts);
+  if (key === "da_notificare") return CALENDAR_COLOR_DA_NOTIFICARE;
+  if (key === "senza_esito") return CALENDAR_COLOR_NO_ESITO;
+  return ESITO_FINALE_COLORS[key];
+}
+
+/** Etichetta legenda / agenda per lo stato colore. */
+export function calendarColorLabel(key: CalendarStatusKey): string {
+  if (key === "da_notificare") return "Da convocare";
+  if (key === "senza_esito") return "Senza esito";
+  return key;
 }
 
 /** Testo leggibile su sfondo chiaro/scuro. */

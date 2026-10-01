@@ -4,8 +4,8 @@
  */
 import type PocketBase from "pocketbase";
 import { resolveCompetenzaNome } from "~/lib/competenza";
-import { parseDateToISO } from "~/lib/import-mediazioni-mapping";
-import type { ImportRow } from "~/lib/import-mediazioni-mapping";
+import { normalizeCodiceFiscale, parseDateToISO } from "~/lib/import-mediazioni-mapping";
+import type { ImportParte, ImportRow } from "~/lib/import-mediazioni-mapping";
 
 export type { ImportRow } from "~/lib/import-mediazioni-mapping";
 
@@ -143,9 +143,7 @@ async function findOrCreateSoggetto(
   addrFields: AddrFields,
   opts?: { preferGiuridica?: boolean; fullName?: string }
 ): Promise<string> {
-  const cfRaw = (parte.codice_fiscale || "").trim().toUpperCase().replace(/\s+/g, "");
-  const junk = /^(N\.?D\.?|NA|N\/A|\?+|X+|-+)$/i.test(cfRaw);
-  const cf = !junk && (cfRaw.length === 16 || cfRaw.length === 11) ? cfRaw : "";
+  const cf = normalizeCodiceFiscale(parte.codice_fiscale);
   const full = (opts?.fullName || [parte.nome, parte.cognome].filter(Boolean).join(" ")).trim();
   const giuridicaHint = /\b(s\.?\s?r\.?\s?l\.?|s\.?\s?p\.?\s?a\.?|srl|spa|snc|sas|societ)/i.test(full);
   const giuridica = Boolean(opts?.preferGiuridica || giuridicaHint);
@@ -219,6 +217,10 @@ async function patchSoggetto(
 ): Promise<string> {
   const id = s.id as string;
   const updates: Record<string, unknown> = {};
+  const excelCf = normalizeCodiceFiscale(parte.codice_fiscale);
+  if (excelCf && !normalizeCodiceFiscale(s.codice_fiscale as string)) {
+    updates.codice_fiscale = excelCf;
+  }
   if (!(s.nome as string)?.trim() && parte.nome) updates.nome = parte.nome;
   if (!(s.cognome as string)?.trim() && parte.cognome) updates.cognome = parte.cognome;
   if (!(s.indirizzo_riga_1 as string)?.trim() && addrFields.indirizzo_riga_1) updates.indirizzo_riga_1 = addrFields.indirizzo_riga_1;
@@ -233,54 +235,143 @@ async function patchSoggetto(
   return id;
 }
 
+/** Riusa l'avvocato esistente (CF, poi nome+cognome) invece di crearne uno nuovo a ogni import. */
+async function findOrCreateAvvocato(
+  pb: PocketBase,
+  avv: ImportRow["avvocatoIstante"]
+): Promise<string | undefined> {
+  const nome = (avv.nome || "").trim();
+  const cognome = (avv.cognome || "").trim();
+  const cf = normalizeCodiceFiscale(avv.codice_fiscale);
+  if (!nome && !cognome && !cf) return undefined;
+
+  const filters: string[] = [];
+  if (cf) filters.push(pb.filter("codice_fiscale = {:cf}", { cf }));
+  if (nome || cognome) filters.push(pb.filter("nome = {:n} && cognome = {:c}", { n: nome, c: cognome }));
+  for (const filter of filters) {
+    const found = await pb
+      .collection("avvocati")
+      .getFirstListItem(filter, { fields: "id" })
+      .catch(() => null);
+    if (found) return found.id;
+  }
+
+  const created = await pb.collection("avvocati").create({
+    nome: nome || undefined,
+    cognome: cognome || undefined,
+    codice_fiscale: cf || undefined,
+    pec: avv.pec,
+    telefono: avv.telefono,
+    indirizzo: avv.indirizzo,
+  });
+  return created.id;
+}
+
+type ExistingParte = {
+  id: string;
+  istante_o_chiamato?: string;
+  avvocati?: string[];
+  expand?: { soggetto?: Record<string, unknown> };
+};
+
+function normName(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function soggettoFullName(s: Record<string, unknown>): string {
+  const rs = String(s.ragione_sociale ?? "").trim();
+  if (rs) return rs;
+  return [s.nome, s.cognome].filter(Boolean).join(" ");
+}
+
+function hasParteData(p: ImportParte | undefined): p is ImportParte {
+  return Boolean(p && (p.nome || p.cognome || p.codice_fiscale));
+}
+
+function partiFromRow(row: ImportRow, ruolo: "Istante" | "Chiamato"): ImportParte[] {
+  const list = ruolo === "Istante" ? row.istanti : row.chiamati;
+  if (list && list.length > 0) return list.filter(hasParteData);
+  const single = ruolo === "Istante" ? row.parteIstante : row.parteChiamato;
+  return hasParteData(single as ImportParte) ? [single as ImportParte] : [];
+}
+
+/**
+ * Parti esistenti: non si aggiungono/rimuovono partecipazioni, ma si corregge il CF
+ * dei soggetti già collegati quando in DB è vuoto/non valido ("nd", troncato, …).
+ */
+async function repairExistingParti(
+  pb: PocketBase,
+  existing: ExistingParte[],
+  excelParti: ImportParte[]
+): Promise<void> {
+  const soggetti = existing
+    .map((p) => p.expand?.soggetto)
+    .filter((s): s is Record<string, unknown> => Boolean(s));
+  if (soggetti.length === 0) return;
+
+  for (const parte of excelParti) {
+    const cf = normalizeCodiceFiscale(parte.codice_fiscale);
+    if (!cf) continue;
+    if (soggetti.some((s) => normalizeCodiceFiscale(s.codice_fiscale as string) === cf)) continue;
+    const key = normName(parte.full || [parte.nome, parte.cognome].join(" "));
+    let target = soggetti.find((s) => normName(soggettoFullName(s)) === key);
+    if (!target && soggetti.length === 1 && excelParti.length === 1) target = soggetti[0];
+    if (target && !normalizeCodiceFiscale(target.codice_fiscale as string)) {
+      await pb.collection("soggetti").update(target.id as string, { codice_fiscale: cf });
+      target.codice_fiscale = cf;
+    }
+  }
+}
+
 async function ensurePartecipazioniFromExcel(
   pb: PocketBase,
   mediazioneId: string,
   row: ImportRow
 ): Promise<void> {
-  // Excel = fonte solo se Istante/Chiamato NON sono già presenti sulla mediazione.
-  const existingParti = await pb
+  const existingParti = (await pb
     .collection("partecipazioni")
     .getFullList({
       filter: pb.filter("mediazione = {:m}", { m: mediazioneId }),
-      fields: "id,istante_o_chiamato",
+      expand: "soggetto",
+      fields: "id,istante_o_chiamato,avvocati,expand.soggetto.id,expand.soggetto.nome,expand.soggetto.cognome,expand.soggetto.ragione_sociale,expand.soggetto.codice_fiscale",
     })
-    .catch(() => []);
-  const hasIstante = existingParti.some(
-    (p) => (p as { istante_o_chiamato?: string }).istante_o_chiamato === "Istante"
-  );
-  const hasChiamato = existingParti.some(
-    (p) => (p as { istante_o_chiamato?: string }).istante_o_chiamato === "Chiamato"
-  );
+    .catch(() => [])) as unknown as ExistingParte[];
+  const istantiDb = existingParti.filter((p) => p.istante_o_chiamato === "Istante");
+  const chiamatiDb = existingParti.filter((p) => p.istante_o_chiamato === "Chiamato");
 
-  if (!hasIstante && (row.parteIstante.nome || row.parteIstante.cognome || row.parteIstante.codice_fiscale)) {
-    const soggettoIstanteId = await findOrCreateSoggetto(pb, row.parteIstante, {});
-    let avvocatoId: string | undefined;
-    const hasAvvocato =
-      row.avvocatoIstante.nome || row.avvocatoIstante.cognome || row.avvocatoIstante.codice_fiscale;
-    if (hasAvvocato) {
-      const avv = await pb.collection("avvocati").create({
-        nome: row.avvocatoIstante.nome || undefined,
-        cognome: row.avvocatoIstante.cognome || undefined,
-        codice_fiscale: row.avvocatoIstante.codice_fiscale,
-        pec: row.avvocatoIstante.pec,
-        telefono: row.avvocatoIstante.telefono,
-        indirizzo: row.avvocatoIstante.indirizzo,
-      });
-      avvocatoId = avv.id;
+  const istantiXl = partiFromRow(row, "Istante");
+  const chiamatiXl = partiFromRow(row, "Chiamato");
+  const avvocatoId = await findOrCreateAvvocato(pb, row.avvocatoIstante);
+
+  if (istantiDb.length > 0) {
+    await repairExistingParti(pb, istantiDb, istantiXl);
+    if (avvocatoId) {
+      for (const p of istantiDb) {
+        if (!p.avvocati || p.avvocati.length === 0) {
+          await pb.collection("partecipazioni").update(p.id, { avvocati: [avvocatoId] });
+        }
+      }
     }
-    await pb.collection("partecipazioni").create({
-      mediazione: mediazioneId,
-      soggetto: soggettoIstanteId,
-      istante_o_chiamato: "Istante",
-      avvocati: avvocatoId ? [avvocatoId] : undefined,
-    });
+  } else {
+    for (const parte of istantiXl) {
+      const soggettoId = await findOrCreateSoggetto(pb, parte, {}, { fullName: parte.full });
+      await pb.collection("partecipazioni").create({
+        mediazione: mediazioneId,
+        soggetto: soggettoId,
+        istante_o_chiamato: "Istante",
+        avvocati: avvocatoId ? [avvocatoId] : undefined,
+      });
+    }
   }
 
-  if (
-    !hasChiamato &&
-    (row.parteChiamato.nome || row.parteChiamato.cognome || row.parteChiamato.codice_fiscale)
-  ) {
+  if (chiamatiDb.length > 0) {
+    await repairExistingParti(pb, chiamatiDb, chiamatiXl);
+  } else {
     const addrChiamato: AddrFields = {
       indirizzo_riga_1: row.parteChiamato.indirizzo_riga_1 || undefined,
       indirizzo_riga_2: row.parteChiamato.indirizzo_riga_2 || undefined,
@@ -289,12 +380,68 @@ async function ensurePartecipazioniFromExcel(
       provincia: row.parteChiamato.provincia || undefined,
       cap: row.parteChiamato.cap || undefined,
     };
-    const soggettoChiamatoId = await findOrCreateSoggetto(pb, row.parteChiamato, addrChiamato);
-    await pb.collection("partecipazioni").create({
-      mediazione: mediazioneId,
-      soggetto: soggettoChiamatoId,
-      istante_o_chiamato: "Chiamato",
-    });
+    for (const [i, parte] of chiamatiXl.entries()) {
+      // L'indirizzo del tracciato si riferisce solo al primo chiamato.
+      const soggettoId = await findOrCreateSoggetto(pb, parte, i === 0 ? addrChiamato : {}, {
+        fullName: parte.full,
+      });
+      await pb.collection("partecipazioni").create({
+        mediazione: mediazioneId,
+        soggetto: soggettoId,
+        istante_o_chiamato: "Chiamato",
+      });
+    }
+  }
+}
+
+/** "YYYY-MM-DD" e "HH:MM" in Europe/Rome per un datetime PocketBase (UTC). */
+function romeParts(utc: string): { date: string; time: string } | null {
+  const d = new Date(utc.replace(" ", "T"));
+  if (isNaN(d.getTime())) return null;
+  const s = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Europe/Rome",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d);
+  const [date, time] = s.split(" ");
+  return { date, time };
+}
+
+/**
+ * Stesso flusso della scheda mediazione: con un incontro si passa a "Da convocare";
+ * con una convocazione registrata o un incontro già passato (convocato fuori dal gestionale) → "Aperte".
+ */
+async function advanceStatoFromIncontri(pb: PocketBase, mediazioneId: string): Promise<void> {
+  const m = await pb
+    .collection("mediazioni")
+    .getOne(mediazioneId, { fields: "id,stato" })
+    .catch(() => null);
+  const stato = String(m?.stato ?? "");
+  if (stato !== "assegnata" && stato !== "da_notificare" && stato !== "pianificata") return;
+
+  const hasConvocazione = await pb
+    .collection("convocazioni")
+    .getList(1, 1, { filter: pb.filter("partecipazione.mediazione = {:m}", { m: mediazioneId }), fields: "id" })
+    .then((r) => r.totalItems > 0)
+    .catch(() => false);
+  const incontri = await pb
+    .collection("incontri")
+    .getList(1, 1, { filter: pb.filter("mediazione = {:m}", { m: mediazioneId }), sort: "data_programmazione", fields: "id,data_programmazione" })
+    .catch(() => null);
+  const first = incontri?.items[0] as { data_programmazione?: string } | undefined;
+  const firstPast = first?.data_programmazione
+    ? new Date(first.data_programmazione.replace(" ", "T")).getTime() < Date.now()
+    : false;
+
+  let next = stato;
+  if (hasConvocazione || firstPast) next = "aperta";
+  else if (first && stato === "assegnata") next = "da_notificare";
+  if (next !== stato) {
+    await pb.collection("mediazioni").update(mediazioneId, { stato: next });
   }
 }
 
@@ -399,13 +546,19 @@ export async function importRows(
         const existing = await pb
           .collection("mediazioni")
           .getFullList({
-            filter: pb.filter("rgm = {:rgm}", { rgm: row.mediazionePayload.rgm }),
+            filter: pb.filter("rgm = {:rgm} && is_deleted != true", { rgm: row.mediazionePayload.rgm }),
+            sort: "created",
             limit: 1,
           })
           .catch(() => []);
         if (existing.length > 0) {
-          await pb.collection("mediazioni").update((existing[0] as { id: string }).id, mediazioneData);
-          mediazioneId = (existing[0] as { id: string }).id;
+          const cur = existing[0] as { id: string; stato?: string };
+          // Non far tornare indietro il flusso (da_notificare / pianificata / aperta → assegnata).
+          if (mediazioneData.stato && !["", "registrata", "assegnata"].includes(cur.stato ?? "")) {
+            delete mediazioneData.stato;
+          }
+          await pb.collection("mediazioni").update(cur.id, mediazioneData);
+          mediazioneId = cur.id;
           isUpdate = true;
         }
       }
@@ -426,26 +579,37 @@ export async function importRows(
       await upsertDocumentoLink(pb, mediazioneId, tipoAdesione, row.mediazionePayload.link_adesione, "Adesione chiamato (import)");
       await upsertDocumentoLink(pb, mediazioneId, tipoChiusura, row.mediazionePayload.link_documento_chiusura, "Documento chiusura (import)");
 
-      // Incontro: upsert — find the first incontro for this mediazione; update data_programmazione
-      // if changed, create if none exists. Data-only Excel → ora default 00:00.
+      // Incontro: se esiste già un incontro nello stesso giorno → nulla (non azzerare l'ora).
+      // Un solo incontro in altro giorno → sposta la data (mantiene l'ora se Excel non la ha).
+      // Più incontri e nessuno nel giorno Excel → non tocca nulla (non si sa quale sia).
       const dataIncontroRaw = (row.mediazionePayload.data_incontro ?? "").toString().trim();
       const oraIncontroRaw = (row.mediazionePayload.ora_incontro ?? "").toString().trim();
       const dataProg = buildDataProgrammazioneUTC(dataIncontroRaw, oraIncontroRaw);
       if (dataProg) {
-        const existingIncontri = await pb
+        const existingIncontri = (await pb
           .collection("incontri")
           .getFullList({
             filter: pb.filter("mediazione = {:m}", { m: mediazioneId }),
-            limit: 1,
+            sort: "data_programmazione",
             fields: "id,data_programmazione",
           })
-          .catch(() => []);
-        if (existingIncontri.length > 0) {
-          const inc = existingIncontri[0] as { id: string; data_programmazione?: string };
-          if (inc.data_programmazione !== dataProg) {
-            await pb.collection("incontri").update(inc.id, { data_programmazione: dataProg });
+          .catch(() => [])) as { id: string; data_programmazione?: string }[];
+        const excelDay = romeParts(dataProg)?.date;
+        const sameDay = existingIncontri.find(
+          (inc) => inc.data_programmazione && romeParts(inc.data_programmazione)?.date === excelDay
+        );
+        if (sameDay) {
+          if (oraIncontroRaw && sameDay.data_programmazione !== dataProg) {
+            await pb.collection("incontri").update(sameDay.id, { data_programmazione: dataProg });
           }
-        } else {
+        } else if (existingIncontri.length === 1) {
+          const inc = existingIncontri[0];
+          const keepTime = !oraIncontroRaw && inc.data_programmazione
+            ? romeParts(inc.data_programmazione)?.time
+            : undefined;
+          const next = keepTime ? buildDataProgrammazioneUTC(dataIncontroRaw, keepTime) ?? dataProg : dataProg;
+          await pb.collection("incontri").update(inc.id, { data_programmazione: next });
+        } else if (existingIncontri.length === 0) {
           await pb.collection("incontri").create({
             mediazione: mediazioneId,
             data_programmazione: dataProg,
@@ -453,6 +617,8 @@ export async function importRows(
           });
         }
       }
+
+      await advanceStatoFromIncontri(pb, mediazioneId);
 
       success++;
     } catch (err: unknown) {

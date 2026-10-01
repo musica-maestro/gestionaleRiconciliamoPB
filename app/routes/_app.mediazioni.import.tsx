@@ -1,17 +1,25 @@
-import { useState, useRef, useEffect } from "react";
-import { Link, useFetcher, useLoaderData } from "@remix-run/react";
+import { useState, useRef, useEffect, useMemo } from "react";
+import { Link, useFetcher, useLoaderData, type ShouldRevalidateFunction } from "@remix-run/react";
 import { json, redirect, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
 import * as XLSX from "xlsx";
 import { requireUserAndRole } from "~/lib/auth.server";
 import { createPB } from "~/lib/pocketbase.server";
-import { mapExcelWorkbookToImport, type ImportRow } from "~/lib/import-mediazioni-mapping";
+import {
+  mapExcelWorkbookToImport,
+  normalizeCodiceFiscale,
+  type ImportRow,
+} from "~/lib/import-mediazioni-mapping";
 import { importRows } from "~/lib/import-mediazioni.server";
 import { Upload, FileSpreadsheet, Loader2, ExternalLink, UserCheck, UserPlus } from "lucide-react";
 
 export const meta = () => [{ title: "Importa mediazioni" }];
 
 /** Chunk size so the UI can show live progress during import. */
-const IMPORT_BATCH_SIZE = 5;
+const IMPORT_BATCH_SIZE = 20;
+
+/** Ogni batch è un POST: senza questo, ogni batch ricarica tutti i soggetti e ri-renderizza l'anteprima. */
+export const shouldRevalidate: ShouldRevalidateFunction = ({ formMethod, defaultShouldRevalidate }) =>
+  formMethod?.toUpperCase() === "POST" ? false : defaultShouldRevalidate;
 
 type ImportProgress = {
   running: boolean;
@@ -118,38 +126,44 @@ function formatDateIT(value: string | null | undefined): string {
 }
 
 type SoggettoMatch = { id: string; inDb: true } | { inDb: false };
+type SoggettoLite = { id: string; nome?: string; cognome?: string; codice_fiscale?: string; ragione_sociale?: string };
+type SoggettoIndex = { byCf: Map<string, string>; byRs: Map<string, string>; byName: Map<string, string> };
+
+function buildSoggettoIndex(soggetti: SoggettoLite[]): SoggettoIndex {
+  const idx: SoggettoIndex = { byCf: new Map(), byRs: new Map(), byName: new Map() };
+  const put = (m: Map<string, string>, k: string, id: string) => {
+    if (k && !m.has(k)) m.set(k, id);
+  };
+  for (const s of soggetti) {
+    put(idx.byCf, (s.codice_fiscale || "").trim().toUpperCase(), s.id);
+    put(idx.byRs, (s.ragione_sociale || "").trim().toLowerCase(), s.id);
+    const n = (s.nome || "").trim().toLowerCase();
+    const c = (s.cognome || "").trim().toLowerCase();
+    if (n || c) put(idx.byName, `${n}\u0000${c}`, s.id);
+  }
+  return idx;
+}
+
 function matchSoggetto(
-  soggetti: Array<{ id: string; nome?: string; cognome?: string; codice_fiscale?: string; ragione_sociale?: string }>,
+  idx: SoggettoIndex,
   parte: { nome: string; cognome: string; codice_fiscale: string }
 ): SoggettoMatch {
-  const cf = (parte.codice_fiscale || "").trim().toUpperCase();
-  if (cf && !/^(N\.?D\.?|NA|\?+|X+)$/i.test(cf)) {
-    const byCf = soggetti.find(
-      (s) => (s.codice_fiscale || "").trim().toUpperCase() === cf
-    );
-    if (byCf) return { id: byCf.id, inDb: true };
-  }
+  const cf = normalizeCodiceFiscale(parte.codice_fiscale);
+  const byCf = cf ? idx.byCf.get(cf) : undefined;
+  if (byCf) return { id: byCf, inDb: true };
   const full = [parte.nome, parte.cognome].filter(Boolean).join(" ").trim().toLowerCase();
-  if (full) {
-    const byRs = soggetti.find((s) => (s.ragione_sociale || "").trim().toLowerCase() === full);
-    if (byRs) return { id: byRs.id, inDb: true };
-  }
+  const byRs = full ? idx.byRs.get(full) : undefined;
+  if (byRs) return { id: byRs, inDb: true };
   const nome = (parte.nome || "").trim().toLowerCase();
   const cognome = (parte.cognome || "").trim().toLowerCase();
-  if (nome || cognome) {
-    const byName = soggetti.find((s) => {
-      const sn = (s.nome || "").trim().toLowerCase();
-      const sc = (s.cognome || "").trim().toLowerCase();
-      return sn === nome && sc === cognome;
-    });
-    if (byName) return { id: byName.id, inDb: true };
-  }
+  const byName = nome || cognome ? idx.byName.get(`${nome}\u0000${cognome}`) : undefined;
+  if (byName) return { id: byName, inDb: true };
   return { inDb: false };
 }
 
 export default function ImportMediazioni() {
   const loaderData = useLoaderData<typeof loader>();
-  const soggetti = loaderData?.soggetti ?? [];
+  const soggettiIndex = useMemo(() => buildSoggettoIndex(loaderData?.soggetti ?? []), [loaderData]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [parsedRows, setParsedRows] = useState<ImportRow[]>([]);
   const [detectedFormat, setDetectedFormat] = useState<"check" | "tracciato" | null>(null);
@@ -506,8 +520,8 @@ export default function ImportMediazioni() {
                 </thead>
                 <tbody>
                   {parsedRows.map((row) => {
-                    const istanteMatch = matchSoggetto(soggetti, row.parteIstante);
-                    const chiamatoMatch = matchSoggetto(soggetti, row.parteChiamato);
+                    const istanteMatch = matchSoggetto(soggettiIndex, row.parteIstante);
+                    const chiamatoMatch = matchSoggetto(soggettiIndex, row.parteChiamato);
                     const linkIstanza = (row.mediazionePayload.link_istanza || "").trim();
                     const linkCartella = (row.mediazionePayload.link_cartella || "").trim();
                     const linkAdesione = (row.mediazionePayload.link_adesione || "").trim();
