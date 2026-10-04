@@ -7,7 +7,7 @@ import {
   useSearchParams,
 } from "@remix-run/react";
 import { useState, useEffect, useRef, type ReactNode } from "react";
-import { AlertTriangle, Check, Copy, FileText, Mail, MoreVertical, Pencil, Plus, Trash2, UserPlus, X } from "lucide-react";
+import { AlertTriangle, Check, Copy, FileText, Mail, MoreVertical, Pencil, Plus, StickyNote, Trash2, UserPlus, X } from "lucide-react";
 import { json, redirect, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
 import type { MetaFunction } from "@remix-run/node";
 import { getCurrentRole, requireUser } from "~/lib/auth.server";
@@ -15,7 +15,18 @@ import { createPB } from "~/lib/pocketbase.server";
 import { AddParteDialog } from "~/components/add-parte-dialog";
 import { AddAvvocatoDialog } from "~/components/add-avvocato-dialog";
 import { RichTextEditor } from "~/components/rich-text-editor";
-import { ESITO_FINALE_FORM_OPTIONS, normalizeEsitoFinale, ESITO_RACCOMANDATA_VALUES, joinEsitoRaccomandata, splitEsitoRaccomandata } from "~/lib/esito-finale";
+import {
+  ESITO_FINALE_FORM_OPTIONS,
+  normalizeEsitoFinale,
+  ESITO_RACCOMANDATA_VALUES,
+  joinEsitoRaccomandata,
+  splitEsitoRaccomandata,
+  normalizeStatoAdesione,
+  statoAdesionePatch,
+  STATO_ADESIONE_VALUES,
+  STATO_ADESIONE_LABELS,
+  type StatoAdesione,
+} from "~/lib/esito-finale";
 import { isCompetenzaAttiva, resolveCompetenzaNome } from "~/lib/competenza";
 import {
   createLetteraIncaricoForMediazione,
@@ -190,10 +201,37 @@ export async function action({ request, params }: ActionFunctionArgs) {
         { status: 422 }
       );
     }
-  } else if (intent === "set_adesione") {
-    const adesione = String(formData.get("adesione") ?? "") === "true";
+  } else if (intent === "update_nota") {
+    const nota = String(formData.get("nota") ?? "").trim();
     try {
-      await pb.collection("mediazioni").update(id, { adesione });
+      await pb.collection("mediazioni").update(id, { nota: nota || "" });
+      return json({ toast: "saved" as const, mediazioneId: id });
+    } catch (e) {
+      return json(
+        {
+          toast: "error" as const,
+          mediazioneId: id,
+          message: pocketBaseErrorMessage(e),
+        },
+        { status: 422 }
+      );
+    }
+  } else if (intent === "set_stato_adesione") {
+    const next = normalizeStatoAdesione(String(formData.get("stato_adesione") ?? ""));
+    try {
+      const patch: Record<string, unknown> = { ...statoAdesionePatch(next) };
+      // Non lasciare esito "Mancata adesione" anticipato senza chiusura
+      const currentEsito = String((mediazione as { esito_finale?: string }).esito_finale ?? "").trim();
+      const dataChiusura = (mediazione as { data_chiusura?: string | null }).data_chiusura;
+      const isClosed = Boolean(dataChiusura) && Boolean(currentEsito);
+      if (
+        !isClosed &&
+        (currentEsito === "Mancata adesione" || currentEsito === "Nessuna adesione") &&
+        next !== "mancata_adesione"
+      ) {
+        patch.esito_finale = "";
+      }
+      await pb.collection("mediazioni").update(id, patch);
       return redirect(`/mediazioni/${id}`);
     } catch (e) {
       return json(
@@ -387,6 +425,16 @@ export async function action({ request, params }: ActionFunctionArgs) {
     if (stato === "da_notificare" || stato === "pianificata") {
       await pb.collection("mediazioni").update(id, { stato: "aperta" });
     }
+    if (stato_raccomandata || motivo_raccomandata) {
+      const { processAzioneRaccomandata } = await import("~/lib/raccomandate-azioni.server");
+      await processAzioneRaccomandata({
+        pb,
+        mediazioneId: id,
+        statoRaccomandata: stato_raccomandata,
+        motivoRaccomandata: motivo_raccomandata,
+        attoreId: user.id,
+      });
+    }
     return redirect(`/mediazioni/${id}?tab=convocazioni`);
   } else if (intent === "add_incontro") {
     await pb.collection("incontri").create({
@@ -520,6 +568,16 @@ export async function action({ request, params }: ActionFunctionArgs) {
       motivo_raccomandata: motivo_raccomandata || null,
       nota: String(formData.get("nota") ?? "").trim() || undefined,
     });
+    if (stato_raccomandata || motivo_raccomandata) {
+      const { processAzioneRaccomandata } = await import("~/lib/raccomandate-azioni.server");
+      await processAzioneRaccomandata({
+        pb,
+        mediazioneId: id,
+        statoRaccomandata: stato_raccomandata,
+        motivoRaccomandata: motivo_raccomandata,
+        attoreId: user.id,
+      });
+    }
     return redirect(`/mediazioni/${id}?tab=convocazioni`);
   } else if (intent === "delete_convocazione") {
     const convocazione_id = String(formData.get("convocazione_id") ?? "");
@@ -541,6 +599,11 @@ export async function action({ request, params }: ActionFunctionArgs) {
       deleted_by: user.id,
     });
     return redirect("/mediazioni");
+  } else if (intent === "mark_azione_raccomandata_evasa") {
+    await pb.collection("mediazioni").update(id, {
+      azione_raccomandata_stato: "evasa",
+    });
+    return redirect(`/mediazioni/${id}`);
   } else if (intent === "create_lettera_incarico") {
     if (role !== "admin" && role !== "manager") {
       throw new Response("Forbidden", { status: 403 });
@@ -872,11 +935,22 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       mediatore_id: mediatoreId ?? "",
       mediatore_name: mediatoreExpanded?.name ?? "—",
       adesione: Boolean((mediazione as { adesione?: boolean }).adesione),
+      stato_adesione: normalizeStatoAdesione(
+        (mediazione as { stato_adesione?: string }).stato_adesione ??
+          ((mediazione as { adesione?: boolean }).adesione ? "adesione" : "in_attesa"),
+      ),
       trasmessa: Boolean((mediazione as { trasmessa?: boolean }).trasmessa),
       proposta_mediatore: Boolean((mediazione as { proposta_mediatore?: boolean }).proposta_mediatore),
       numero_esonerati_gratuito_patrocinio:
         Number((mediazione as { numero_esonerati_gratuito_patrocinio?: number }).numero_esonerati_gratuito_patrocinio ?? 0) || 0,
       materia_altro: (mediazione as { materia_altro?: string }).materia_altro ?? "",
+      azione_raccomandata: String((mediazione as { azione_raccomandata?: string }).azione_raccomandata ?? ""),
+      azione_raccomandata_stato: String(
+        (mediazione as { azione_raccomandata_stato?: string }).azione_raccomandata_stato ?? "",
+      ),
+      azione_raccomandata_nota: String(
+        (mediazione as { azione_raccomandata_nota?: string }).azione_raccomandata_nota ?? "",
+      ),
     },
     partecipazioni,
     incontri,
@@ -2484,6 +2558,7 @@ export default function MediazioneDetail() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = (searchParams.get("tab") as (typeof TABS)[number]["id"]) || "parti";
   const [editMode, setEditMode] = useState(false);
+  const [notaEditMode, setNotaEditMode] = useState(false);
   const [oggettoEdit, setOggettoEdit] = useState(mediazione.oggetto ?? "");
   const [editingPartecipazioneId, setEditingPartecipazioneId] = useState<string | null>(null);
   const [dialogMode, setDialogMode] = useState<DialogMode>(null);
@@ -2494,6 +2569,11 @@ export default function MediazioneDetail() {
   useEffect(() => {
     if (editMode) setOggettoEdit(mediazione.oggetto ?? "");
   }, [editMode, mediazione.oggetto]);
+
+  useEffect(() => {
+    if (!editMode) return;
+    setNotaEditMode(false);
+  }, [editMode]);
 
   const missingConvocazioniFiles = (() => {
     const hasRaccomandata = partecipazioni.some((p) =>
@@ -2513,11 +2593,14 @@ export default function MediazioneDetail() {
 
   const isSavingMediazione =
     navigation.state === "submitting" && navigation.formData?.get("_action") === "update";
+  const isSavingNota =
+    navigation.state === "submitting" && navigation.formData?.get("_action") === "update_nota";
 
   useEffect(() => {
     if (!actionData?.toast || actionData.mediazioneId !== mediazione.id) return;
     if (actionData.toast === "saved") {
       setEditMode(false);
+      setNotaEditMode(false);
       setSaveToast({
         kind: "saved",
         detail: "message" in actionData ? actionData.message : undefined,
@@ -2680,34 +2763,11 @@ export default function MediazioneDetail() {
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1.85fr)] items-start">
         <div className="space-y-2 lg:sticky lg:top-16 lg:self-start lg:max-h-[calc(100vh-5rem)] lg:overflow-y-auto">
         <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <h1 className="text-sm sm:text-base font-semibold text-slate-800 truncate">
+          <div className="mb-1.5 flex items-center justify-between gap-2 min-w-0">
+            <h1 className="text-sm sm:text-base font-semibold text-slate-800 truncate min-w-0">
               Mediazione {mediazione.rgm || mediazione.id}
             </h1>
-            <div className="flex items-center gap-1.5 shrink-0">
-              <Form method="post">
-                <input type="hidden" name="_action" value="set_adesione" />
-                <input
-                  type="hidden"
-                  name="adesione"
-                  value={mediazione.adesione ? "false" : "true"}
-                />
-                <button
-                  type="submit"
-                  className={`inline-flex items-center rounded-md px-2 py-1 text-[11px] font-medium ${
-                    mediazione.adesione
-                      ? "bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
-                      : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                  }`}
-                  title={
-                    mediazione.adesione
-                      ? "Rimuovi adesione"
-                      : "Segna adesione (notifica il mediatore se non sei tu)"
-                  }
-                >
-                  {mediazione.adesione ? "Adesione: sì" : "Segna adesione"}
-                </button>
-              </Form>
+            <div className="flex items-center gap-1 shrink-0">
               {!editMode && (
                 <button
                   type="button"
@@ -2752,6 +2812,47 @@ export default function MediazioneDetail() {
               )}
             </div>
           </div>
+
+          {!editMode && (
+            <div
+              className="mb-2 inline-flex w-full max-w-full rounded-lg border border-slate-200 bg-slate-50 p-0.5"
+              role="group"
+              aria-label="Stato adesione"
+            >
+              {STATO_ADESIONE_VALUES.map((value) => {
+                const active = mediazione.stato_adesione === value;
+                const shortLabel =
+                  value === "in_attesa" ? "In attesa" : value === "adesione" ? "Adesione" : "Mancata";
+                const activeClass =
+                  value === "adesione"
+                    ? "bg-sky-500 text-white shadow-sm"
+                    : value === "mancata_adesione"
+                      ? "bg-slate-900 text-white shadow-sm"
+                      : "bg-white text-slate-800 shadow-sm";
+                return (
+                  <Form method="post" key={value} className="flex-1 min-w-0">
+                    <input type="hidden" name="_action" value="set_stato_adesione" />
+                    <input type="hidden" name="stato_adesione" value={value} />
+                    <button
+                      type="submit"
+                      disabled={active}
+                      className={`flex w-full items-center justify-center gap-1 rounded-md px-1.5 py-1.5 text-[11px] font-medium transition-colors disabled:cursor-default ${
+                        active
+                          ? activeClass
+                          : "text-slate-600 hover:bg-white hover:text-slate-800"
+                      }`}
+                      title={STATO_ADESIONE_LABELS[value as StatoAdesione]}
+                    >
+                      {active && value === "adesione" ? (
+                        <Check className="h-3 w-3 shrink-0" aria-hidden="true" />
+                      ) : null}
+                      {shortLabel}
+                    </button>
+                  </Form>
+                );
+              })}
+            </div>
+          )}
 
           {!editMode ? (
             <div className="space-y-2">
@@ -2822,16 +2923,71 @@ export default function MediazioneDetail() {
                 </span>
               </div>
 
-              {mediazione.nota ? (
-                <div>
-                  <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400 leading-none">
+              <div className="rounded-lg border border-slate-100 bg-slate-50/70 px-2 py-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="inline-flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-slate-400 leading-none">
+                    <StickyNote className="h-3 w-3" aria-hidden="true" />
                     Nota
                   </p>
-                  <div className="mt-0.5 whitespace-pre-wrap max-h-16 overflow-auto text-xs text-slate-800 leading-snug">
-                    {mediazione.nota}
-                  </div>
+                  {!notaEditMode && (
+                    <button
+                      type="button"
+                      onClick={() => setNotaEditMode(true)}
+                      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[#2f8f99] hover:bg-white"
+                    >
+                      <Pencil className="h-3 w-3" aria-hidden="true" />
+                      {mediazione.nota ? "Modifica" : "Aggiungi"}
+                    </button>
+                  )}
                 </div>
-              ) : null}
+                {notaEditMode ? (
+                  <Form method="post" className="mt-1.5 space-y-1.5">
+                    <input type="hidden" name="_action" value="update_nota" />
+                    <textarea
+                      name="nota"
+                      rows={3}
+                      defaultValue={mediazione.nota}
+                      autoFocus
+                      placeholder="Scrivi una nota…"
+                      className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800 outline-none focus:border-[#3aaeba] focus:ring-1 focus:ring-[#3aaeba]/60"
+                    />
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="submit"
+                        disabled={isSavingNota}
+                        className="rounded-md bg-[#3aaeba] px-2 py-1 text-[11px] font-medium text-white hover:bg-[#349aa5] disabled:opacity-60"
+                      >
+                        {isSavingNota ? "Salvataggio…" : "Salva nota"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isSavingNota}
+                        onClick={() => setNotaEditMode(false)}
+                        className="rounded-md px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-white disabled:opacity-60"
+                      >
+                        Annulla
+                      </button>
+                    </div>
+                  </Form>
+                ) : mediazione.nota ? (
+                  <button
+                    type="button"
+                    onClick={() => setNotaEditMode(true)}
+                    className="mt-1 block w-full text-left whitespace-pre-wrap max-h-20 overflow-auto text-xs text-slate-800 leading-snug hover:text-slate-950"
+                    title="Clicca per modificare"
+                  >
+                    {mediazione.nota}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setNotaEditMode(true)}
+                    className="mt-1 block w-full rounded-md border border-dashed border-slate-200 bg-white/60 px-2 py-2 text-left text-[11px] text-slate-400 hover:border-[#3aaeba]/50 hover:text-slate-600"
+                  >
+                    Clicca per aggiungere una nota…
+                  </button>
+                )}
+              </div>
 
               <p className="text-[10px] text-slate-400 leading-none pt-0.5 border-t border-slate-100">
                 Creata {formatDateTime(mediazione.created)}
@@ -3104,12 +3260,57 @@ export default function MediazioneDetail() {
           )}
 
         </section>
-        <button
-          type="button"
-          className="w-full rounded-lg bg-[#3aaeba] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#349aa5]"
-        >
-          Genera verbale
-        </button>
+        {mediazione.azione_raccomandata && mediazione.azione_raccomandata_stato === "da_fare" ? (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 shadow-sm space-y-2">
+            <p className="text-xs font-semibold text-amber-900">
+              Azione raccomandata da fare
+            </p>
+            <p className="text-xs text-amber-900/90">
+              {mediazione.azione_raccomandata === "verbale_nessuna_risposta"
+                ? "Predisporre verbale di Nessuna Risposta (incontro passato, senza adesione)."
+                : "Comunicazione di mancata consegna all'avvocato istante (documento generato in Documenti)."}
+            </p>
+            {mediazione.azione_raccomandata_nota ? (
+              <p className="text-[11px] text-amber-800/80">{mediazione.azione_raccomandata_nota}</p>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              {mediazione.azione_raccomandata === "verbale_nessuna_risposta" ? (
+                <button
+                  type="button"
+                  className="rounded-lg bg-[#3aaeba] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#349aa5]"
+                  onClick={() => setSearchParams({ tab: "incontri" })}
+                >
+                  Vai a incontri / verbale
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="rounded-lg bg-[#3aaeba] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#349aa5]"
+                  onClick={() => setSearchParams({ tab: "documenti" })}
+                >
+                  Vai a documenti
+                </button>
+              )}
+              <Form method="post">
+                <input type="hidden" name="_action" value="mark_azione_raccomandata_evasa" />
+                <button
+                  type="submit"
+                  className="rounded-lg border border-amber-400 bg-white px-3 py-1.5 text-xs font-medium text-amber-900 hover:bg-amber-100"
+                >
+                  Segna come evasa
+                </button>
+              </Form>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="w-full rounded-lg bg-[#3aaeba] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#349aa5]"
+            onClick={() => setSearchParams({ tab: "incontri" })}
+          >
+            Genera verbale
+          </button>
+        )}
         </div>
 
         <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">

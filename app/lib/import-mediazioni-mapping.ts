@@ -300,14 +300,15 @@ export function normalizeCheckEsito(raw: string): string {
   if (!trimmed) return "";
   const key = trimmed.toLowerCase().replace(/\s+/g, " ");
   if (key === "aperta" || key === "non consegnabile" || key === "esito gestionale") return "";
-  if (key === "nr" || key === "nessuna risposta" || key === "mancata comparizione") {
+  if (key === "nr" || key === "nessuna risposta") {
     return "Nessuna risposta";
   }
+  if (key === "mancata comparizione") return "Mancata comparizione";
   if (key === "accordo") return "Accordo";
   if (key === "mancato accordo") return "Mancato accordo";
   if (key === "chiusa d'ufficio" || key === "chiusa d ufficio") return "Chiusa d'ufficio";
   if (key === "ritirata") return "Ritirata";
-  if (key === "nessuna adesione" || key === "mancata adesione") return "Nessuna adesione";
+  if (key === "nessuna adesione" || key === "mancata adesione") return "Mancata adesione";
   // Capitalizza prima lettera per match soft
   return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
 }

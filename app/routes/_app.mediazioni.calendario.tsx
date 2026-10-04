@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useFetcher, useLoaderData, useNavigate, useSearchParams } from "@remix-run/react";
 import { json, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
 import type { MetaFunction } from "@remix-run/node";
-import { ChevronDown, ChevronLeft, ChevronRight, Download, Menu, Plus, Search, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Download, Menu, Search, X } from "lucide-react";
 import { getCurrentRole, requireUser } from "~/lib/auth.server";
 import {
-  CALENDAR_COLOR_DA_NOTIFICARE,
-  CALENDAR_COLOR_NO_ESITO,
+  CALENDAR_STATO_COLORS,
+  CALENDAR_STATO_LABELS,
+  CALENDAR_STATO_VALUES,
   ESITO_FINALE_COLORS,
   ESITO_FINALE_VALUES,
   calendarColorKey,
@@ -14,6 +15,7 @@ import {
   calendarEventColor,
   calendarEventTextColor,
   type CalendarStatusKey,
+  type CalendarStatoKey,
 } from "~/lib/esito-finale";
 import { createPB } from "~/lib/pocketbase.server";
 
@@ -47,37 +49,19 @@ const GCAL_COLORS = [
   "#7cb342",
 ] as const;
 
-/** Lifecycle fase for sidebar filters. */
-const FASI = ["pianificata", "notificata", "chiusa"] as const;
-type Fase = (typeof FASI)[number];
+const COLOR_LEGEND_STATI: { id: string; label: string; color: string }[] =
+  CALENDAR_STATO_VALUES.map((id) => ({
+    id,
+    label: CALENDAR_STATO_LABELS[id],
+    color: CALENDAR_STATO_COLORS[id],
+  }));
 
-const FASE_LABELS: Record<Fase, string> = {
-  pianificata: "Pianificate",
-  notificata: "Notificate",
-  chiusa: "Chiuse",
-};
-
-const FASE_LABELS_SINGULAR: Record<Fase, string> = {
-  pianificata: "Pianificata",
-  notificata: "Notificata",
-  chiusa: "Chiusa",
-};
-
-const COLOR_LEGEND: { id: string; label: string; color: string }[] = [
-  { id: "da_notificare", label: "Da convocare", color: CALENDAR_COLOR_DA_NOTIFICARE },
-  { id: "senza_esito", label: "Senza esito", color: CALENDAR_COLOR_NO_ESITO },
-  ...ESITO_FINALE_VALUES.map((label) => ({
+const COLOR_LEGEND_ESITI: { id: string; label: string; color: string }[] =
+  ESITO_FINALE_VALUES.map((label) => ({
     id: label,
     label,
     color: ESITO_FINALE_COLORS[label],
-  })),
-];
-
-/** Chiusa = data chiusura + esito valorizzato. */
-const FILTER_CHIUSE =
-  `(mediazione.data_chiusura != "" && mediazione.data_chiusura != null && mediazione.esito_finale != "" && mediazione.esito_finale != null)`;
-const FILTER_APERTE =
-  `(mediazione.data_chiusura = "" || mediazione.data_chiusura = null || mediazione.esito_finale = "" || mediazione.esito_finale = null)`;
+  }));
 
 function isMediazioneChiusa(mediazione: {
   data_chiusura?: unknown;
@@ -88,18 +72,6 @@ function isMediazioneChiusa(mediazione: {
     : "";
   const esito = mediazione.esito_finale ? String(mediazione.esito_finale).trim() : "";
   return Boolean(dataChiusura && esito);
-}
-
-function faseOf(mediazione: {
-  stato?: unknown;
-  data_chiusura?: unknown;
-  esito_finale?: unknown;
-}): Fase | "altro" {
-  if (isMediazioneChiusa(mediazione)) return "chiusa";
-  const stato = String(mediazione.stato ?? "");
-  if (stato === "da_notificare" || stato === "pianificata") return "pianificata";
-  if (stato === "aperta") return "notificata";
-  return "altro";
 }
 
 type CalendarEvent = {
@@ -113,7 +85,7 @@ type CalendarEvent = {
   rgm: string;
   oggetto: string;
   stato: string;
-  fase: Fase | "altro";
+  chiusa: boolean;
   esitoFinale: string;
   mediatoreId: string;
   mediatoreName: string;
@@ -122,24 +94,40 @@ type CalendarEvent = {
   controparte: string;
   avvocati: string;
   adesione: boolean;
+  statoAdesione: string;
+};
+
+type SearchHit = {
+  id: string;
+  mediazioneId: string;
+  rgm: string;
+  dayKey: string;
+  timeLabel: string;
+  mediatoreName: string;
 };
 
 /** Same priority as calendarEventColor — used to toggle legend filters. */
-function colorKeyOf(e: Pick<CalendarEvent, "esitoFinale" | "stato" | "adesione">): CalendarStatusKey {
+function colorKeyOf(
+  e: Pick<CalendarEvent, "esitoFinale" | "stato" | "statoAdesione" | "adesione" | "chiusa" | "startMs">,
+): CalendarStatusKey {
   return calendarColorKey({
     esitoFinale: e.esitoFinale,
     stato: e.stato,
+    statoAdesione: e.statoAdesione,
     adesione: e.adesione,
+    chiusa: e.chiusa,
+    meetingStartMs: e.startMs,
   });
 }
 
-function statusLabelOf(e: Pick<CalendarEvent, "esitoFinale" | "stato" | "adesione" | "fase">): string {
+function statusLabelOf(
+  e: Pick<CalendarEvent, "esitoFinale" | "stato" | "statoAdesione" | "adesione" | "chiusa" | "startMs">,
+): string {
   const key = colorKeyOf(e);
-  if (key === "da_notificare" || key === "senza_esito") {
-    return calendarColorLabel(key);
+  if ((CALENDAR_STATO_VALUES as readonly string[]).includes(key)) {
+    return calendarColorLabel(key as CalendarStatoKey);
   }
   if (e.esitoFinale.trim()) return e.esitoFinale.trim();
-  if (e.fase !== "altro") return FASE_LABELS_SINGULAR[e.fase];
   return calendarColorLabel(key);
 }
 
@@ -227,15 +215,16 @@ function hashColorIndex(id: string) {
   return h % GCAL_COLORS.length;
 }
 
-function colorOf(index: number) {
-  return GCAL_COLORS[index % GCAL_COLORS.length];
-}
-
-function eventColor(e: Pick<CalendarEvent, "esitoFinale" | "stato" | "adesione">) {
+function eventColor(
+  e: Pick<CalendarEvent, "esitoFinale" | "stato" | "statoAdesione" | "adesione" | "chiusa" | "startMs">,
+) {
   return calendarEventColor({
     esitoFinale: e.esitoFinale,
     stato: e.stato,
+    statoAdesione: e.statoAdesione,
     adesione: e.adesione,
+    chiusa: e.chiusa,
+    meetingStartMs: e.startMs,
   });
 }
 
@@ -382,13 +371,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
 
   const canFilterMediatore = role === "admin" || role === "manager";
-  const adesioneParam = url.searchParams.get("adesione")?.trim() ?? "";
-  const adesioneFilter =
-    adesioneParam === "si" || adesioneParam === "no" ? adesioneParam : "";
-  const faseParam = url.searchParams.get("fase")?.trim() ?? "";
-  const faseFilter: Fase | "" = (FASI as readonly string[]).includes(faseParam)
-    ? (faseParam as Fase)
-    : "";
+  const searchQ = (url.searchParams.get("q") ?? "").trim();
   const { fromYmd, toYmd } = rangeForView(view, anchor);
   const fromUtc = italianLocalToUTC(`${fromYmd}T00:00`);
   const toUtc = italianLocalToUTC(`${toYmd}T23:59`);
@@ -399,20 +382,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
   ];
   if (role === "mediatore") {
     filterParts.push(`mediazione.mediatore = "${user.id}"`);
-  }
-  if (adesioneFilter === "si") {
-    filterParts.push("mediazione.adesione = true");
-  } else if (adesioneFilter === "no") {
-    filterParts.push("mediazione.adesione = false");
-  }
-  if (faseFilter === "pianificata") {
-    filterParts.push(
-      `${FILTER_APERTE} && (mediazione.stato = "da_notificare" || mediazione.stato = "pianificata")`,
-    );
-  } else if (faseFilter === "notificata") {
-    filterParts.push(`${FILTER_APERTE} && mediazione.stato = "aperta"`);
-  } else if (faseFilter === "chiusa") {
-    filterParts.push(FILTER_CHIUSE);
   }
 
   const [incontri, mediatoriList] = await Promise.all([
@@ -431,6 +400,60 @@ export async function loader({ request }: LoaderFunctionArgs) {
         })
       : Promise.resolve([]),
   ]);
+
+  // Global RGM search hits (not limited to current view range)
+  const searchHits: SearchHit[] = [];
+  if (searchQ) {
+    try {
+      const escaped = searchQ.replace(/"/g, '\\"');
+      const medFilterParts = [`rgm ~ "${escaped}"`, `(is_deleted = false || is_deleted = null)`];
+      if (role === "mediatore") {
+        medFilterParts.push(`mediatore = "${user.id}"`);
+      }
+      const mediazioniMatch = await pb.collection("mediazioni").getList(1, 20, {
+        filter: medFilterParts.join(" && "),
+        fields: "id,rgm,mediatore",
+        expand: "mediatore",
+        sort: "-updated",
+        requestKey: null,
+      });
+      const medIds = mediazioniMatch.items.map((m) => m.id);
+      if (medIds.length > 0) {
+        const hitIncontri = await pb.collection("incontri").getFullList({
+          filter: medIds.map((mid) => `mediazione = "${mid}"`).join(" || "),
+          expand: "mediazione,mediazione.mediatore",
+          sort: "data_programmazione",
+          requestKey: null,
+        });
+        for (const raw of hitIncontri as Record<string, unknown>[]) {
+          const mediazione = (raw.expand as { mediazione?: Record<string, unknown> } | undefined)
+            ?.mediazione;
+          if (!mediazione || mediazione.is_deleted) continue;
+          const startIso = String(raw.data_programmazione ?? "");
+          if (!startIso) continue;
+          const start = new Date(startIso);
+          if (Number.isNaN(start.getTime())) continue;
+          const startParts = formatPartsInRome(start);
+          const mediatoreExp = mediazione.expand as
+            | { mediatore?: { id?: string; name?: string; email?: string } }
+            | undefined;
+          searchHits.push({
+            id: String(raw.id),
+            mediazioneId: String(mediazione.id ?? raw.mediazione),
+            rgm: String(mediazione.rgm ?? "—"),
+            dayKey: startParts.dayKey,
+            timeLabel: startParts.timeLabel,
+            mediatoreName:
+              mediatoreExp?.mediatore?.name ||
+              mediatoreExp?.mediatore?.email ||
+              "Mediatore",
+          });
+        }
+      }
+    } catch {
+      // ignore search errors — calendar still loads range events
+    }
+  }
 
   const mediazioneIds = [
     ...new Set(
@@ -524,8 +547,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       avvocati: "",
     };
 
-    const fase = faseOf(mediazione);
     const esitoFinale = String(mediazione.esito_finale ?? "").trim();
+    const chiusa = isMediazioneChiusa(mediazione);
 
     events.push({
       id: String(raw.id),
@@ -538,7 +561,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       rgm: String(mediazione.rgm ?? "—"),
       oggetto: String(mediazione.oggetto ?? ""),
       stato: String(mediazione.stato ?? ""),
-      fase,
+      chiusa,
       esitoFinale,
       mediatoreId,
       mediatoreName,
@@ -547,6 +570,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
       controparte: parti.controparte,
       avvocati: parti.avvocati,
       adesione: Boolean(mediazione.adesione),
+      statoAdesione: String(
+        (mediazione as { stato_adesione?: string }).stato_adesione ??
+          (mediazione.adesione ? "adesione" : "in_attesa"),
+      ),
     });
   }
 
@@ -590,8 +617,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     date: ymd(anchor),
     canFilterMediatore,
     mediatori,
-    adesioneFilter,
-    faseFilter,
+    searchHits,
+    searchQ,
+    highlightId: (url.searchParams.get("highlight") ?? "").trim(),
   });
 }
 
@@ -707,6 +735,7 @@ function EventBlock({
   density,
   hourH,
   draggingId,
+  highlighted,
   onDragStartEvent,
   onDragEndEvent,
   onPreviewSlot,
@@ -716,6 +745,7 @@ function EventBlock({
   density: "day" | "week";
   hourH: number;
   draggingId: string | null;
+  highlighted?: boolean;
   onDragStartEvent: (id: string) => void;
   onDragEndEvent: () => void;
   onPreviewSlot: (dayKey: string, mins: number) => void;
@@ -793,7 +823,7 @@ function EventBlock({
       }}
       className={`absolute z-10 overflow-hidden rounded-md px-1.5 py-1 hover:z-30 hover:brightness-110 shadow-sm cursor-grab active:cursor-grabbing transition-[top,left,width,height,opacity,filter] duration-300 ease-out ${
         isDragging ? "opacity-40" : ""
-      }`}
+      } ${highlighted ? "z-40 ring-2 ring-offset-1 ring-[var(--cal-accent)] brightness-110" : ""}`}
       style={{
         top,
         height: hPx,
@@ -1006,6 +1036,7 @@ function TimeGrid({
   onSelectDay,
   onReschedule,
   busy,
+  highlightId,
 }: {
   days: { key: string; date: Date; label: string }[];
   events: CalendarEvent[];
@@ -1014,6 +1045,7 @@ function TimeGrid({
   onSelectDay: (key: string) => void;
   onReschedule: (op: RescheduleOp) => void;
   busy: boolean;
+  highlightId?: string;
 }) {
   const hourH = density === "day" ? HOUR_H_DAY : HOUR_H_WEEK;
   const hours: number[] = [];
@@ -1172,6 +1204,7 @@ function TimeGrid({
                 density={density}
                 hourH={hourH}
                 draggingId={draggingId}
+                highlighted={Boolean(highlightId && highlightId === e.id)}
                 onDragStartEvent={setDraggingId}
                 onDragEndEvent={clearDragUi}
                 onPreviewSlot={(dayKey, mins) => setPreview({ dayKey, mins })}
@@ -1196,15 +1229,64 @@ function TimeGrid({
 }
 
 export default function CalendarioMediazioniPage() {
-  const { events, view, date, canFilterMediatore, mediatori, adesioneFilter, faseFilter } =
-    useLoaderData<typeof loader>();
+  const {
+    events,
+    view,
+    date,
+    canFilterMediatore,
+    mediatori,
+    searchHits,
+    searchQ,
+    highlightId,
+  } = useLoaderData<typeof loader>();
   const [searchParams, setSearchParams] = useSearchParams();
   const isNarrow = useIsNarrow(1024);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  const [searchDraft, setSearchDraft] = useState(searchQ);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [optimisticEvents, setOptimisticEvents] = useState<CalendarEvent[] | null>(null);
   const fetcher = useFetcher<typeof action>();
   const nowMs = useNowTick(view === "week" || view === "day");
+
+  useEffect(() => {
+    setSearchDraft(searchQ);
+  }, [searchQ]);
+
+  // Debounce draft → URL search (jump/highlight), keep Enter for immediate commit
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      const nextQ = searchDraft.trim();
+      const cur = searchQ.trim();
+      if (nextQ === cur) return;
+      const next = new URLSearchParams(searchParams);
+      if (!nextQ) {
+        next.delete("q");
+        next.delete("highlight");
+      } else {
+        next.set("q", nextQ);
+        next.delete("highlight");
+      }
+      setSearchParams(next);
+    }, 350);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchDraft]);
+
+  // Jump to first global hit when searching an RGM outside the current range
+  useEffect(() => {
+    if (!searchQ || searchHits.length === 0) return;
+    const first = searchHits[0];
+    const already = highlightId === first.id && date === first.dayKey;
+    if (already) return;
+    const next = new URLSearchParams(searchParams);
+    next.set("q", searchQ);
+    next.set("date", first.dayKey);
+    next.set("highlight", first.id);
+    if (view === "month") next.set("view", "week");
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only react to search result identity
+  }, [searchQ, searchHits.map((h) => h.id).join(",")]);
 
   // Desktop: open filters sidebar by default; mobile: keep closed (drawer).
   useEffect(() => {
@@ -1271,11 +1353,32 @@ export default function CalendarioMediazioniPage() {
     });
   }, [displayEvents, hiddenIds, hiddenColors, canFilterMediatore]);
 
-  const searchQuery = (searchParams.get("q") ?? "").trim().toLowerCase();
+  const updateParams = (patch: Record<string, string | null>) => {
+    const next = new URLSearchParams(searchParams);
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === null || v === "") next.delete(k);
+      else next.set(k, v);
+    }
+    setSearchParams(next);
+  };
 
-  const searchedEvents = useMemo(() => {
-    if (!searchQuery) return visibleEvents;
-    return visibleEvents.filter((e) => {
+  const commitSearch = (raw: string) => {
+    const q = raw.trim();
+    if (!q) {
+      updateParams({ q: null, highlight: null });
+      setSearchOpen(false);
+      return;
+    }
+    updateParams({ q, highlight: null });
+    setSearchOpen(true);
+  };
+
+  const matchedIds = useMemo(() => {
+    const q = searchQ.trim().toLowerCase();
+    if (!q) return new Set<string>();
+    const ids = new Set<string>();
+    for (const h of searchHits) ids.add(h.id);
+    for (const e of visibleEvents) {
       const haystack = [
         e.rgm,
         e.oggetto,
@@ -1287,25 +1390,12 @@ export default function CalendarioMediazioniPage() {
       ]
         .join(" ")
         .toLowerCase();
-      return haystack.includes(searchQuery);
-    });
-  }, [visibleEvents, searchQuery]);
-
-  const updateParams = (patch: Record<string, string | null>) => {
-    const next = new URLSearchParams(searchParams);
-    for (const [k, v] of Object.entries(patch)) {
-      if (v === null || v === "") next.delete(k);
-      else next.set(k, v);
+      if (haystack.includes(q)) ids.add(e.id);
     }
-    setSearchParams(next);
-  };
+    return ids;
+  }, [searchQ, searchHits, visibleEvents]);
 
-  const toggleMediatore = (id: string) => {
-    const next = new Set(hiddenIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    updateParams({ hide: next.size ? [...next].join(",") : null });
-  };
+  const activeHighlight = highlightId || (matchedIds.size === 1 ? [...matchedIds][0] : "");
 
   const setMediatoreOnly = (id: string | null) => {
     if (!id) {
@@ -1336,8 +1426,6 @@ export default function CalendarioMediazioniPage() {
   const resetColorFilters = () => {
     updateParams({
       hideColor: null,
-      adesione: null,
-      fase: null,
     });
   };
 
@@ -1374,7 +1462,7 @@ export default function CalendarioMediazioniPage() {
 
   const byDay = useMemo(() => {
     const map: Record<string, CalendarEvent[]> = {};
-    for (const e of searchedEvents) {
+    for (const e of visibleEvents) {
       if (!map[e.dayKey]) map[e.dayKey] = [];
       map[e.dayKey].push(e);
     }
@@ -1382,7 +1470,7 @@ export default function CalendarioMediazioniPage() {
       map[key].sort((a, b) => a.startMs - b.startMs || a.rgm.localeCompare(b.rgm));
     }
     return map;
-  }, [searchedEvents]);
+  }, [visibleEvents]);
 
   const weekDays = useMemo(() => {
     const start = startOfWeekMonday(anchor);
@@ -1440,16 +1528,8 @@ export default function CalendarioMediazioniPage() {
 
   const sidebarInner = (
     <>
-      <div className="p-3 flex items-center gap-2">
-        <Link
-          to="/mediazioni/pianifica"
-          className="inline-flex flex-1 items-center gap-2 rounded-2xl bg-[var(--cal-hover)] hover:bg-[var(--cal-border)] pl-3 pr-5 py-3 text-sm font-medium text-[var(--cal-text)] shadow-md"
-          onClick={closeSidebarIfNarrow}
-        >
-          <Plus className="h-5 w-5 text-[var(--cal-accent)]" />
-          Pianifica incontri
-        </Link>
-        {isNarrow ? (
+      {isNarrow ? (
+        <div className="p-2 flex justify-end">
           <button
             type="button"
             className="p-2 rounded-full hover:bg-[var(--cal-hover)]"
@@ -1458,8 +1538,8 @@ export default function CalendarioMediazioniPage() {
           >
             <ChevronLeft className="h-5 w-5" />
           </button>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
 
       <MiniMonth
         anchor={miniAnchor}
@@ -1477,147 +1557,102 @@ export default function CalendarioMediazioniPage() {
       />
 
       <div className="px-4 pt-2 pb-1 text-xs font-medium text-[var(--cal-muted)]">
-        Filtri
+        Stati
       </div>
-      <div className="px-3 pb-2 space-y-2">
-        {canFilterMediatore ? (
-          <select
-            className="w-full rounded-lg border border-[var(--cal-border)] bg-[var(--cal-bg)] px-2 py-1.5 text-sm text-[var(--cal-text)]"
-            value={mediatoreSelectValue === "__multi__" ? "" : mediatoreSelectValue}
-            onChange={(e) => setMediatoreOnly(e.target.value || null)}
-            aria-label="Filtra per mediatore"
-          >
-            <option value="">
-              {mediatoreSelectValue === "__multi__"
-                ? "Mediatore: selezione multipla"
-                : "Mediatore: tutti"}
-            </option>
-            {mediatori.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-              </option>
-            ))}
-          </select>
-        ) : null}
-        <select
-          className="w-full rounded-lg border border-[var(--cal-border)] bg-[var(--cal-bg)] px-2 py-1.5 text-sm text-[var(--cal-text)]"
-          value={adesioneFilter}
-          onChange={(e) =>
-            updateParams({ adesione: e.target.value || null })
-          }
-          aria-label="Filtra per adesione"
-        >
-          <option value="">Adesione: tutte</option>
-          <option value="si">Solo con adesione</option>
-          <option value="no">Senza adesione</option>
-        </select>
-        <select
-          className="w-full rounded-lg border border-[var(--cal-border)] bg-[var(--cal-bg)] px-2 py-1.5 text-sm text-[var(--cal-text)]"
-          value={faseFilter}
-          onChange={(e) => updateParams({ fase: e.target.value || null })}
-          aria-label="Filtra per stato mediazione"
-        >
-          <option value="">Stato: tutte</option>
-          <option value="pianificata">Pianificate</option>
-          <option value="notificata">Notificate</option>
-          <option value="chiusa">Chiuse</option>
-        </select>
-        <div className="flex items-center gap-2 pt-1">
-          <button
-            type="button"
-            className="flex-1 rounded-md border border-[var(--cal-border)] px-2 py-1.5 text-xs font-medium text-[var(--cal-text)] hover:bg-[var(--cal-hover)]"
-            onClick={selectAllColors}
-          >
-            Seleziona tutti
-          </button>
-          <button
-            type="button"
-            className="flex-1 rounded-md border border-[var(--cal-border)] px-2 py-1.5 text-xs font-medium text-[var(--cal-text)] hover:bg-[var(--cal-hover)]"
-            onClick={resetColorFilters}
-          >
-            Reset
-          </button>
-        </div>
-        <div className="flex flex-col gap-0.5 pt-1 max-h-52 overflow-y-auto">
-          {COLOR_LEGEND.map((item) => {
-            const checked = !hiddenColors.has(item.id);
-            return (
-              <button
-                key={item.id}
-                type="button"
-                className={`flex w-full items-center gap-2.5 rounded-lg px-1.5 py-1.5 text-left hover:bg-[var(--cal-hover)] ${
-                  checked ? "opacity-100" : "opacity-45"
-                }`}
-                onClick={() => toggleColor(item.id)}
-                aria-pressed={checked}
-                aria-label={`${checked ? "Nascondi" : "Mostra"} ${item.label}`}
-              >
-                <span
-                  className="flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px] border-2"
-                  style={{
-                    backgroundColor: checked ? item.color : "transparent",
-                    borderColor: item.color,
-                  }}
-                  aria-hidden
-                >
-                  {checked && (
-                    <svg
-                      viewBox="0 0 16 16"
-                      className="h-2.5 w-2.5"
-                      style={{
-                        fill: calendarEventTextColor(item.color),
-                      }}
-                    >
-                      <path d="M6.2 11.4 2.8 8l1.1-1.1 2.3 2.3 5-5L12.3 5.3z" />
-                    </svg>
-                  )}
-                </span>
-                <span className="text-sm leading-snug text-[var(--cal-text)]">{item.label}</span>
-              </button>
-            );
-          })}
-        </div>
-        <p className="pt-2 text-xs leading-snug text-[var(--cal-muted)] hidden lg:block">
-          Trascina un incontro sullo slot: sullo stesso orario di un altro restano affiancati.
-        </p>
-      </div>
-
-      <div className="px-4 pt-2 pb-1 text-xs font-medium text-[var(--cal-muted)]">
-        {canFilterMediatore ? "Mediatori" : "Il mio calendario"}
-      </div>
-      <div className="flex-1 overflow-y-auto px-2 pb-4 space-y-0.5">
-        {mediatori.map((m) => {
-          const checked = !hiddenIds.has(m.id);
-          const color = colorOf(m.colorIndex);
+      <div className="px-3 pb-1 space-y-0.5">
+        {COLOR_LEGEND_STATI.map((item) => {
+          const checked = !hiddenColors.has(item.id);
           return (
             <button
-              key={m.id}
+              key={item.id}
               type="button"
-              className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-[var(--cal-hover)] disabled:cursor-default"
-              onClick={() => {
-                if (!canFilterMediatore) return;
-                toggleMediatore(m.id);
-              }}
-              disabled={!canFilterMediatore}
+              className={`flex w-full items-center gap-2.5 rounded-lg px-1.5 py-1.5 text-left hover:bg-[var(--cal-hover)] ${
+                checked ? "opacity-100" : "opacity-45"
+              }`}
+              onClick={() => toggleColor(item.id)}
+              aria-pressed={checked}
+              aria-label={`${checked ? "Nascondi" : "Mostra"} ${item.label}`}
             >
               <span
-                className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[3px] border-2"
+                className="flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px] border-2"
                 style={{
-                  backgroundColor: checked ? color : "transparent",
-                  borderColor: color,
+                  backgroundColor: checked ? item.color : "transparent",
+                  borderColor: item.color,
                 }}
                 aria-hidden
               >
                 {checked && (
-                  <svg viewBox="0 0 16 16" className="h-3 w-3 fill-white">
+                  <svg
+                    viewBox="0 0 16 16"
+                    className="h-2.5 w-2.5"
+                    style={{ fill: calendarEventTextColor(item.color) }}
+                  >
                     <path d="M6.2 11.4 2.8 8l1.1-1.1 2.3 2.3 5-5L12.3 5.3z" />
                   </svg>
                 )}
               </span>
-              <span className="text-sm truncate text-[var(--cal-text)]">{m.name}</span>
+              <span className="text-sm leading-snug text-[var(--cal-text)]">{item.label}</span>
             </button>
           );
         })}
+      </div>
+
+      <div className="px-4 pt-3 pb-1 text-xs font-medium text-[var(--cal-muted)]">
+        Esiti
+      </div>
+      <div className="flex-1 overflow-y-auto px-3 pb-2 space-y-0.5">
+        {COLOR_LEGEND_ESITI.map((item) => {
+          const checked = !hiddenColors.has(item.id);
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className={`flex w-full items-center gap-2.5 rounded-lg px-1.5 py-1.5 text-left hover:bg-[var(--cal-hover)] ${
+                checked ? "opacity-100" : "opacity-45"
+              }`}
+              onClick={() => toggleColor(item.id)}
+              aria-pressed={checked}
+              aria-label={`${checked ? "Nascondi" : "Mostra"} ${item.label}`}
+            >
+              <span
+                className="flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px] border-2"
+                style={{
+                  backgroundColor: checked ? item.color : "transparent",
+                  borderColor: item.color,
+                }}
+                aria-hidden
+              >
+                {checked && (
+                  <svg
+                    viewBox="0 0 16 16"
+                    className="h-2.5 w-2.5"
+                    style={{ fill: calendarEventTextColor(item.color) }}
+                  >
+                    <path d="M6.2 11.4 2.8 8l1.1-1.1 2.3 2.3 5-5L12.3 5.3z" />
+                  </svg>
+                )}
+              </span>
+              <span className="text-sm leading-snug text-[var(--cal-text)]">{item.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="px-3 pb-2 flex items-center gap-2">
+        <button
+          type="button"
+          className="flex-1 rounded-md border border-[var(--cal-border)] px-2 py-1.5 text-xs font-medium text-[var(--cal-text)] hover:bg-[var(--cal-hover)]"
+          onClick={selectAllColors}
+        >
+          Seleziona tutti
+        </button>
+        <button
+          type="button"
+          className="flex-1 rounded-md border border-[var(--cal-border)] px-2 py-1.5 text-xs font-medium text-[var(--cal-text)] hover:bg-[var(--cal-hover)]"
+          onClick={resetColorFilters}
+        >
+          Reset
+        </button>
       </div>
 
       <div className="px-3 pb-3">
@@ -1706,27 +1741,71 @@ export default function CalendarioMediazioniPage() {
 
           <div className="flex-1" />
 
-          <label className="relative flex items-center min-w-0 flex-1 sm:flex-none sm:w-56 max-w-full order-last sm:order-none basis-full sm:basis-auto mt-1 sm:mt-0">
+          <div className="relative flex items-center min-w-0 flex-1 sm:flex-none sm:w-64 max-w-full order-last sm:order-none basis-full sm:basis-auto mt-1 sm:mt-0">
             <Search className="pointer-events-none absolute left-2.5 h-4 w-4 text-[var(--cal-muted)]" />
             <input
               type="search"
               className="w-full rounded-lg border border-[var(--cal-border)] bg-[var(--cal-bg)] py-1.5 pl-8 pr-8 text-sm text-[var(--cal-text)] placeholder:text-[var(--cal-muted)]"
-              placeholder="Cerca RGM, parti…"
-              value={searchParams.get("q") ?? ""}
-              onChange={(e) => updateParams({ q: e.target.value || null })}
-              aria-label="Cerca nel calendario"
+              placeholder="Cerca RGM…"
+              value={searchDraft}
+              onChange={(e) => {
+                setSearchDraft(e.target.value);
+                setSearchOpen(true);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commitSearch(searchDraft);
+                }
+              }}
+              onBlur={() => {
+                // allow click on dropdown
+                window.setTimeout(() => setSearchOpen(false), 150);
+              }}
+              aria-label="Cerca RGM nel calendario"
             />
-            {(searchParams.get("q") ?? "") && (
+            {searchDraft && (
               <button
                 type="button"
                 className="absolute right-1.5 p-1 rounded-full hover:bg-[var(--cal-hover)] text-[var(--cal-muted)]"
                 aria-label="Pulisci ricerca"
-                onClick={() => updateParams({ q: null })}
+                onClick={() => {
+                  setSearchDraft("");
+                  commitSearch("");
+                }}
               >
                 <X className="h-3.5 w-3.5" />
               </button>
             )}
-          </label>
+            {searchOpen && searchHits.length > 0 && (
+              <div className="absolute left-0 right-0 top-full mt-1 z-50 max-h-64 overflow-auto rounded-lg border border-[var(--cal-border)] bg-[var(--cal-hover)] py-1 shadow-xl">
+                {searchHits.slice(0, 12).map((hit) => (
+                  <button
+                    key={hit.id}
+                    type="button"
+                    className="block w-full text-left px-3 py-2 text-sm hover:bg-[var(--cal-border)]"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      updateParams({
+                        q: hit.rgm,
+                        date: hit.dayKey,
+                        highlight: hit.id,
+                        view: view === "month" ? "week" : view,
+                      });
+                      setSearchDraft(hit.rgm);
+                      setSearchOpen(false);
+                    }}
+                  >
+                    <span className="font-medium text-[var(--cal-text)]">{hit.rgm}</span>
+                    <span className="ml-2 text-[var(--cal-muted)]">
+                      {hit.dayKey} · {hit.timeLabel}
+                    </span>
+                    <span className="ml-2 text-[var(--cal-muted)] truncate">{hit.mediatoreName}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
           {canFilterMediatore ? (
             <select
@@ -1797,12 +1876,13 @@ export default function CalendarioMediazioniPage() {
               <div className="hidden lg:block flex-1 min-w-0 min-h-0 overflow-hidden">
                 <TimeGrid
                   days={dayDays}
-                  events={searchedEvents}
+                  events={visibleEvents}
                   density="day"
                   nowMs={nowMs}
                   onSelectDay={() => {}}
                   onReschedule={handleReschedule}
                   busy={busy}
+                  highlightId={activeHighlight}
                 />
               </div>
               <aside className="w-full lg:max-w-[400px] flex-1 lg:flex-none shrink-0 lg:border-l border-[var(--cal-border)] flex flex-col min-h-0 lg:h-full">
@@ -1830,12 +1910,13 @@ export default function CalendarioMediazioniPage() {
             ) : (
               <TimeGrid
                 days={weekDays}
-                events={searchedEvents}
+                events={visibleEvents}
                 density="week"
                 nowMs={nowMs}
                 onSelectDay={(key) => updateParams({ view: "day", date: key })}
                 onReschedule={handleReschedule}
                 busy={busy}
+                highlightId={activeHighlight}
               />
             )
           )}
@@ -1881,7 +1962,11 @@ export default function CalendarioMediazioniPage() {
                           <Link
                             key={e.id}
                             to={`/mediazioni/${e.mediazioneId}?tab=incontri`}
-                            className="flex items-center gap-1 truncate rounded px-0.5 text-[11px] leading-5 hover:bg-[var(--cal-hover)]"
+                            className={`flex items-center gap-1 truncate rounded px-0.5 text-[11px] leading-5 hover:bg-[var(--cal-hover)] ${
+                              activeHighlight === e.id
+                                ? "ring-1 ring-[var(--cal-accent)] bg-[var(--cal-hover)]"
+                                : ""
+                            }`}
                             title={eventTooltip(e)}
                           >
                             <span

@@ -530,7 +530,7 @@ export async function importRows(
           ? { trasmessa: Boolean(row.mediazionePayload.trasmessa) }
           : {}),
         ...(isUrlLike(row.mediazionePayload.link_adesione || "")
-          ? { adesione: true }
+          ? { adesione: true, stato_adesione: "adesione" }
           : {}),
         // Check: non azzerare mediatore se non risolto; Tracciato: comportamento precedente
         ...(mediatoreId

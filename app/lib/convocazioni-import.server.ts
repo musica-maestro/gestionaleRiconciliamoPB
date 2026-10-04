@@ -4,7 +4,12 @@
  */
 import type PocketBase from "pocketbase";
 import JSZip from "jszip";
-import { STATO_RACCOMANDATA_VALUES, type StatoRaccomandata } from "~/lib/esito-finale";
+import {
+  ESITO_RACCOMANDATA_VALUES,
+  STATO_RACCOMANDATA_VALUES,
+  type StatoRaccomandata,
+} from "~/lib/esito-finale";
+import { processAzioneRaccomandata } from "~/lib/raccomandate-azioni.server";
 
 /** Blob-like upload from FormData (Node 18 has no global File). */
 type UploadedBlob = Blob & { name: string; size: number };
@@ -172,18 +177,41 @@ function toDateOnly(d: Date): string {
 function mapStatoRaccomandata(raw: string | null): StatoRaccomandata | undefined {
   if (!raw?.trim()) return undefined;
   const key = raw.trim().toLowerCase();
-  if (key.includes("consegnat") && !key.includes("non")) return "Consegnata";
+  if (key.includes("consegnat") && !key.includes("non") && !key.includes("non consegnabile")) {
+    return "Consegnata";
+  }
   if (
     key.includes("non consegnabile") ||
     key.includes("resa") ||
     key.includes("compiuta giacenza") ||
-    key.includes("destinatario sconosciuto") ||
-    key.includes("indirizzo insufficiente")
+    key.includes("destinatario") ||
+    key.includes("indirizzo") ||
+    key.includes("invio rifiutato") ||
+    key.includes("rifiutato")
   ) {
     return "Non consegnabile";
   }
   const exact = STATO_RACCOMANDATA_VALUES.find((s) => s.toLowerCase() === key);
   return exact;
+}
+
+/** Map Alfared/Poste free-text status → detailed motivo (Poste label) when possible. */
+function mapMotivoRaccomandata(raw: string | null): string | undefined {
+  if (!raw?.trim()) return undefined;
+  const key = raw.trim().toLowerCase().replace(/\s+/g, " ");
+  if (key.includes("consegnat") && !key.includes("non")) return undefined;
+  const fromCanon = ESITO_RACCOMANDATA_VALUES.find((v) => v.toLowerCase() === key);
+  if (fromCanon && fromCanon !== "Consegnata") return fromCanon;
+  if (key.includes("compiuta giacenza")) return "Al mittente per compiuta giacenza";
+  if (key.includes("invio rifiutato") || key.includes("rifiutato")) return "Invio rifiutato";
+  if (key.includes("irreperibile")) return "Destinatario irreperibile";
+  if (key.includes("deceduto")) return "Destinatario deceduto";
+  if (key.includes("sconosciuto")) return "Destinatario sconosciuto";
+  if (key.includes("trasferito")) return "Destinatario trasferito";
+  if (key.includes("inesatto")) return "Indirizzo inesatto";
+  if (key.includes("inesistente")) return "Indirizzo inesistente";
+  if (key.includes("insufficiente")) return "Indirizzo insufficiente";
+  return undefined;
 }
 
 function parseRow(
@@ -540,6 +568,7 @@ export async function importConvocazioniFromAlfared(
         }
 
         const statoRaccomandata = mapStatoRaccomandata(row.status);
+        const motivoRaccomandata = mapMotivoRaccomandata(row.status);
         await pb.collection("convocazioni").create({
           partecipazione: chiamatoId,
           tipologia: "Raccomandata",
@@ -548,13 +577,30 @@ export async function importConvocazioniFromAlfared(
           data_invio: dataInvio,
           data_caricamento: today,
           stato_raccomandata: statoRaccomandata,
+          motivo_raccomandata: motivoRaccomandata || undefined,
           nota: row.destinatario
             ? `Destinatario Alfared: ${row.destinatario}`
             : undefined,
         });
         created++;
+        await processAzioneRaccomandata({
+          pb,
+          mediazioneId,
+          statoRaccomandata,
+          motivoRaccomandata,
+        });
       } else {
         skipped++;
+        const statoRaccomandata = mapStatoRaccomandata(row.status);
+        const motivoRaccomandata = mapMotivoRaccomandata(row.status);
+        if (statoRaccomandata || motivoRaccomandata) {
+          await processAzioneRaccomandata({
+            pb,
+            mediazioneId,
+            statoRaccomandata,
+            motivoRaccomandata,
+          });
+        }
       }
 
       // Always move da-convocare → aperte once the ritorno is applied for this pratica.

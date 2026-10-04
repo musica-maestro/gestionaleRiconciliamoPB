@@ -85,19 +85,21 @@ export enum ConvocazioniStatoRaccomandataOptions {
 export enum DashboardChiusePerEsitoMeseEsitoFinaleOptions {
   "Accordo" = "Accordo",
   "Mancato accordo" = "Mancato accordo",
+  "Mancata comparizione" = "Mancata comparizione",
+  "Mancata adesione" = "Mancata adesione",
+  "Nessuna risposta" = "Nessuna risposta",
   "Chiusa d'ufficio" = "Chiusa d'ufficio",
   "Ritirata" = "Ritirata",
-  "Nessuna risposta" = "Nessuna risposta",
-  "Nessuna adesione" = "Nessuna adesione",
 }
 
 export enum MediazioniEsitoFinaleOptions {
   "Accordo" = "Accordo",
   "Mancato accordo" = "Mancato accordo",
+  "Mancata comparizione" = "Mancata comparizione",
+  "Mancata adesione" = "Mancata adesione",
+  "Nessuna risposta" = "Nessuna risposta",
   "Chiusa d'ufficio" = "Chiusa d'ufficio",
   "Ritirata" = "Ritirata",
-  "Nessuna risposta" = "Nessuna risposta",
-  "Nessuna adesione" = "Nessuna adesione",
 }
 
 export enum MediazioniStatoOptions {
@@ -107,13 +109,20 @@ export enum MediazioniStatoOptions {
   "aperta" = "aperta",
 }
 
+export enum MediazioniStatoAdesioneOptions {
+  "in_attesa" = "in_attesa",
+  "adesione" = "adesione",
+  "mancata_adesione" = "mancata_adesione",
+}
+
 export enum MediazioniViewEsitoFinaleOptions {
   "Accordo" = "Accordo",
   "Mancato accordo" = "Mancato accordo",
+  "Mancata comparizione" = "Mancata comparizione",
+  "Mancata adesione" = "Mancata adesione",
+  "Nessuna risposta" = "Nessuna risposta",
   "Chiusa d'ufficio" = "Chiusa d'ufficio",
   "Ritirata" = "Ritirata",
-  "Nessuna risposta" = "Nessuna risposta",
-  "Nessuna adesione" = "Nessuna adesione",
 }
 
 export enum MediazioniViewStatoOptions {
@@ -127,6 +136,7 @@ export enum NotificheTipoOptions {
   "assegnazione" = "assegnazione",
   "riassegnazione" = "riassegnazione",
   "adesione" = "adesione",
+  "azione_raccomandata" = "azione_raccomandata",
 }
 
 export enum PartecipazioniIstanteOChiamatoOptions {
@@ -354,10 +364,14 @@ export type MediazioniRecord = {
   data_assegnazione?: IsoDateString
   codice_univoco_cliente?: string
   adesione?: boolean
+  stato_adesione?: MediazioniStatoAdesioneOptions
   trasmessa?: boolean
   proposta_mediatore?: boolean
   numero_esonerati_gratuito_patrocinio?: number
   materia_altro?: string
+  azione_raccomandata?: "verbale_nessuna_risposta" | "comunicazione_mancata_consegna" | ""
+  azione_raccomandata_stato?: "da_fare" | "evasa" | ""
+  azione_raccomandata_nota?: string
   created?: IsoDateString
   updated?: IsoDateString
 }

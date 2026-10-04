@@ -1,5 +1,13 @@
 /** Valori canonici esito_finale (ordine UI). */
-export const ESITO_FINALE_VALUES = ["Accordo", "Mancato accordo", "Chiusa d'ufficio", "Ritirata", "Nessuna risposta", "Nessuna adesione"] as const;
+export const ESITO_FINALE_VALUES = [
+  "Accordo",
+  "Mancato accordo",
+  "Mancata comparizione",
+  "Mancata adesione",
+  "Nessuna risposta",
+  "Chiusa d'ufficio",
+  "Ritirata",
+] as const;
 
 export type EsitoFinale = (typeof ESITO_FINALE_VALUES)[number];
 
@@ -13,36 +21,111 @@ export const ESITO_FINALE_FILTER_OPTIONS = ESITO_FINALE_VALUES.map((label) => ({
 export const ESITO_FINALE_COLORS: Record<EsitoFinale, string> = {
   Accordo: "#38bdf8", // skyblue
   "Mancato accordo": "#1e3a8a", // dark blue
+  "Mancata comparizione": "#7c3aed", // violet
+  "Mancata adesione": "#111827", // black
+  "Nessuna risposta": "#ec4899", // pink
   "Chiusa d'ufficio": "#86efac", // light green
   Ritirata: "#166534", // dark green
-  "Nessuna risposta": "#ec4899", // pink
-  "Nessuna adesione": "#111827", // black
 };
 
-export const CALENDAR_COLOR_DA_NOTIFICARE = "#facc15"; // yellow
-export const CALENDAR_COLOR_NO_ESITO = "#d1d5db"; // light gray
+/** Stato adesione esplicito su mediazioni (campo DB `stato_adesione`). */
+export const STATO_ADESIONE_VALUES = [
+  "in_attesa",
+  "adesione",
+  "mancata_adesione",
+] as const;
 
-/** Chiavi legenda / filtro colore calendario (oltre agli esiti finali). */
-export const CALENDAR_STATUS_KEYS = ["da_notificare", "senza_esito"] as const;
-export type CalendarStatusKey = (typeof CALENDAR_STATUS_KEYS)[number] | EsitoFinale;
+export type StatoAdesione = (typeof STATO_ADESIONE_VALUES)[number];
+
+export const STATO_ADESIONE_LABELS: Record<StatoAdesione, string> = {
+  in_attesa: "In attesa",
+  adesione: "Adesione",
+  mancata_adesione: "Mancata adesione",
+};
+
+/** Stati display calendario (stato_adesione + chiusa; esiti restano separati). */
+export const CALENDAR_STATO_VALUES = [
+  "in_attesa",
+  "adesione",
+  "mancata_adesione",
+  "chiusa",
+] as const;
+
+export type CalendarStatoKey = (typeof CALENDAR_STATO_VALUES)[number];
+
+export const CALENDAR_STATO_COLORS: Record<CalendarStatoKey, string> = {
+  in_attesa: "#d1d5db", // light gray
+  adesione: "#38bdf8", // sky
+  mancata_adesione: "#111827", // black — same as esito, distinta in legenda
+  chiusa: "#94a3b8", // slate
+};
+
+export const CALENDAR_STATO_LABELS: Record<CalendarStatoKey, string> = {
+  in_attesa: "In attesa",
+  adesione: "Adesione",
+  mancata_adesione: "Mancata adesione",
+  chiusa: "Chiusa",
+};
+
+/** Sync helper: bool `adesione` derivato da stato_adesione. */
+export function adesioneFromStato(stato: string | null | undefined): boolean {
+  return normalizeStatoAdesione(stato) === "adesione";
+}
+
+export function normalizeStatoAdesione(raw: string | null | undefined): StatoAdesione {
+  const v = String(raw ?? "").trim();
+  if ((STATO_ADESIONE_VALUES as readonly string[]).includes(v)) return v as StatoAdesione;
+  return "in_attesa";
+}
+
+/** Patch DB per impostare stato_adesione + sync bool adesione. */
+export function statoAdesionePatch(stato: StatoAdesione): {
+  stato_adesione: StatoAdesione;
+  adesione: boolean;
+} {
+  return {
+    stato_adesione: stato,
+    adesione: stato === "adesione",
+  };
+}
+
+/** @deprecated legacy yellow; calendar no longer uses Da convocare */
+export const CALENDAR_COLOR_DA_NOTIFICARE = "#facc15";
+/** @deprecated use CALENDAR_STATO_COLORS.in_attesa */
+export const CALENDAR_COLOR_NO_ESITO = CALENDAR_STATO_COLORS.in_attesa;
+
+export type CalendarStatusKey = CalendarStatoKey | EsitoFinale;
 
 export function calendarColorKey(opts: {
   esitoFinale?: string | null;
   stato?: string | null;
+  /** Campo esplicito mediazioni.stato_adesione */
+  statoAdesione?: string | null;
+  /** @deprecated fallback se statoAdesione assente */
   adesione?: boolean;
+  /** True when data_chiusura + esito are set. */
+  chiusa?: boolean;
+  meetingStartMs?: number | null;
+  nowMs?: number;
 }): CalendarStatusKey {
   const esito = String(opts.esitoFinale ?? "").trim();
+
+  // Esito di chiusura ha priorità (inclusa Mancata adesione come esito)
   if (esito && esito in ESITO_FINALE_COLORS) {
     return esito as EsitoFinale;
   }
-  const stato = String(opts.stato ?? "");
-  if (stato === "da_notificare" || stato === "pianificata") {
-    return "da_notificare";
-  }
-  if (!esito && opts.adesione === false) {
-    return "Nessuna adesione";
-  }
-  return "senza_esito";
+
+  if (opts.chiusa) return "chiusa";
+
+  const sa = String(opts.statoAdesione ?? "").trim();
+  if (sa === "adesione") return "adesione";
+  if (sa === "mancata_adesione") return "mancata_adesione";
+  if (sa === "in_attesa") return "in_attesa";
+
+  // Fallback legacy: solo bool adesione
+  if (opts.adesione === true) return "adesione";
+
+  return "in_attesa";
 }
 
 /** Valori stato raccomandata sulle convocazioni (derivati dall'esito). */
@@ -62,6 +145,26 @@ export const ESITO_RACCOMANDATA_VALUES = [
   "Indirizzo inesistente",
   "Indirizzo insufficiente",
   "Al mittente per compiuta giacenza",
+] as const;
+
+export type EsitoRaccomandata = (typeof ESITO_RACCOMANDATA_VALUES)[number];
+
+/** Esiti che → verbale Nessuna Risposta (se incontro passato e no adesione). */
+export const ESITI_RACCOMANDATA_VERBALE_NR = [
+  "Invio rifiutato",
+  "Al mittente per compiuta giacenza",
+  "Consegnata",
+] as const;
+
+/** Esiti che → comunicazione mancata consegna ad avvocato istante. */
+export const ESITI_RACCOMANDATA_MANCATA_CONSEGNA = [
+  "Indirizzo inesatto",
+  "Indirizzo inesistente",
+  "Indirizzo insufficiente",
+  "Destinatario irreperibile",
+  "Destinatario deceduto",
+  "Destinatario sconosciuto",
+  "Destinatario trasferito",
 ] as const;
 
 /** @deprecated Usare ESITO_RACCOMANDATA_VALUES */
@@ -101,11 +204,10 @@ const ALIASES: Record<string, EsitoFinale> = {
   ritirata: "Ritirata",
   "nessuna risposta": "Nessuna risposta",
   nr: "Nessuna risposta",
-  "mancata comparizione": "Nessuna risposta",
-  "nessuna adesione": "Nessuna adesione",
-  "mancata adesione": "Nessuna adesione",
+  "mancata comparizione": "Mancata comparizione",
+  "nessuna adesione": "Mancata adesione",
+  "mancata adesione": "Mancata adesione",
   improcedibile: "Ritirata",
-  // legacy: treat old "In corso" / "Non consegnabile" as empty (moved to stato_raccomandata)
 };
 
 const BY_KEY = new Map<string, EsitoFinale>(ESITO_FINALE_VALUES.map((v) => [normalizeKey(v), v]));
@@ -125,22 +227,28 @@ export function normalizeEsitoFinale(raw: string): string {
 /** Opzioni select modifica mediazione (include vuoto). */
 export const ESITO_FINALE_FORM_OPTIONS = ["", ...ESITO_FINALE_VALUES] as const;
 
-/** Colore evento calendario da esito / stato / adesione. */
+/** Colore evento calendario da esito / stato_adesione. */
 export function calendarEventColor(opts: {
   esitoFinale?: string | null;
   stato?: string | null;
+  statoAdesione?: string | null;
   adesione?: boolean;
+  chiusa?: boolean;
+  meetingStartMs?: number | null;
+  nowMs?: number;
 }): string {
   const key = calendarColorKey(opts);
-  if (key === "da_notificare") return CALENDAR_COLOR_DA_NOTIFICARE;
-  if (key === "senza_esito") return CALENDAR_COLOR_NO_ESITO;
-  return ESITO_FINALE_COLORS[key];
+  if (key in CALENDAR_STATO_COLORS) {
+    return CALENDAR_STATO_COLORS[key as CalendarStatoKey];
+  }
+  return ESITO_FINALE_COLORS[key as EsitoFinale];
 }
 
 /** Etichetta legenda / agenda per lo stato colore. */
 export function calendarColorLabel(key: CalendarStatusKey): string {
-  if (key === "da_notificare") return "Da convocare";
-  if (key === "senza_esito") return "Senza esito";
+  if (key in CALENDAR_STATO_LABELS) {
+    return CALENDAR_STATO_LABELS[key as CalendarStatoKey];
+  }
   return key;
 }
 
@@ -154,3 +262,19 @@ export function calendarEventTextColor(bg: string): string {
   const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
   return luminance > 0.55 ? "#1f2937" : "#ffffff";
 }
+
+/** Tipi azione post-esito raccomandata. */
+export const AZIONE_RACCOMANDATA_VALUES = [
+  "verbale_nessuna_risposta",
+  "comunicazione_mancata_consegna",
+] as const;
+
+export type AzioneRaccomandata = (typeof AZIONE_RACCOMANDATA_VALUES)[number];
+
+export const AZIONE_RACCOMANDATA_STATO_VALUES = ["da_fare", "evasa"] as const;
+export type AzioneRaccomandataStato = (typeof AZIONE_RACCOMANDATA_STATO_VALUES)[number];
+
+export const AZIONE_RACCOMANDATA_LABELS: Record<AzioneRaccomandata, string> = {
+  verbale_nessuna_risposta: "Verbale Nessuna Risposta",
+  comunicazione_mancata_consegna: "Comunicazione mancata consegna",
+};
