@@ -1,13 +1,5 @@
 /** Valori canonici esito_finale (ordine UI). */
-export const ESITO_FINALE_VALUES = [
-  "Accordo",
-  "Mancato accordo",
-  "Mancata comparizione",
-  "Mancata adesione",
-  "Nessuna risposta",
-  "Chiusa d'ufficio",
-  "Ritirata",
-] as const;
+export const ESITO_FINALE_VALUES = ["Accordo", "Mancato accordo", "Mancata comparizione", "Mancata adesione", "Nessuna risposta", "Chiusa d'ufficio", "Ritirata"] as const;
 
 export type EsitoFinale = (typeof ESITO_FINALE_VALUES)[number];
 
@@ -29,11 +21,7 @@ export const ESITO_FINALE_COLORS: Record<EsitoFinale, string> = {
 };
 
 /** Stato adesione esplicito su mediazioni (campo DB `stato_adesione`). */
-export const STATO_ADESIONE_VALUES = [
-  "in_attesa",
-  "adesione",
-  "mancata_adesione",
-] as const;
+export const STATO_ADESIONE_VALUES = ["in_attesa", "adesione", "mancata_adesione"] as const;
 
 export type StatoAdesione = (typeof STATO_ADESIONE_VALUES)[number];
 
@@ -44,12 +32,7 @@ export const STATO_ADESIONE_LABELS: Record<StatoAdesione, string> = {
 };
 
 /** Stati display calendario (stato_adesione + chiusa; esiti restano separati). */
-export const CALENDAR_STATO_VALUES = [
-  "in_attesa",
-  "adesione",
-  "mancata_adesione",
-  "chiusa",
-] as const;
+export const CALENDAR_STATO_VALUES = ["in_attesa", "adesione", "mancata_adesione", "chiusa"] as const;
 
 export type CalendarStatoKey = (typeof CALENDAR_STATO_VALUES)[number];
 
@@ -134,38 +117,15 @@ export const STATO_RACCOMANDATA_VALUES = ["Consegnata", "Non consegnabile"] as c
 export type StatoRaccomandata = (typeof STATO_RACCOMANDATA_VALUES)[number];
 
 /** Esiti raccomandata (Poste Italiane) — singoli, inclusa la consegna. */
-export const ESITO_RACCOMANDATA_VALUES = [
-  "Consegnata",
-  "Destinatario irreperibile",
-  "Destinatario deceduto",
-  "Destinatario sconosciuto",
-  "Destinatario trasferito",
-  "Invio rifiutato",
-  "Indirizzo inesatto",
-  "Indirizzo inesistente",
-  "Indirizzo insufficiente",
-  "Al mittente per compiuta giacenza",
-] as const;
+export const ESITO_RACCOMANDATA_VALUES = ["Consegnata", "Destinatario irreperibile", "Destinatario deceduto", "Destinatario sconosciuto", "Destinatario trasferito", "Invio rifiutato", "Indirizzo inesatto", "Indirizzo inesistente", "Indirizzo insufficiente", "Al mittente per compiuta giacenza"] as const;
 
 export type EsitoRaccomandata = (typeof ESITO_RACCOMANDATA_VALUES)[number];
 
 /** Esiti che → verbale Nessuna Risposta (se incontro passato e no adesione). */
-export const ESITI_RACCOMANDATA_VERBALE_NR = [
-  "Invio rifiutato",
-  "Al mittente per compiuta giacenza",
-  "Consegnata",
-] as const;
+export const ESITI_RACCOMANDATA_VERBALE_NR = ["Invio rifiutato", "Al mittente per compiuta giacenza", "Consegnata"] as const;
 
 /** Esiti che → comunicazione mancata consegna ad avvocato istante. */
-export const ESITI_RACCOMANDATA_MANCATA_CONSEGNA = [
-  "Indirizzo inesatto",
-  "Indirizzo inesistente",
-  "Indirizzo insufficiente",
-  "Destinatario irreperibile",
-  "Destinatario deceduto",
-  "Destinatario sconosciuto",
-  "Destinatario trasferito",
-] as const;
+export const ESITI_RACCOMANDATA_MANCATA_CONSEGNA = ["Indirizzo inesatto", "Indirizzo inesistente", "Indirizzo insufficiente", "Destinatario irreperibile", "Destinatario deceduto", "Destinatario sconosciuto", "Destinatario trasferito"] as const;
 
 /** @deprecated Usare ESITO_RACCOMANDATA_VALUES */
 export const MOTIVO_RACCOMANDATA_VALUES = ESITO_RACCOMANDATA_VALUES;
@@ -182,10 +142,7 @@ export function splitEsitoRaccomandata(esito: string): {
 }
 
 /** Da stato+motivo salvati → valore select esito. */
-export function joinEsitoRaccomandata(
-  stato?: string | null,
-  motivo?: string | null
-): string {
+export function joinEsitoRaccomandata(stato?: string | null, motivo?: string | null): string {
   if (stato === "Consegnata") return "Consegnata";
   if (motivo?.trim()) return motivo.trim();
   if (stato === "Non consegnabile") return "";
@@ -228,15 +185,7 @@ export function normalizeEsitoFinale(raw: string): string {
 export const ESITO_FINALE_FORM_OPTIONS = ["", ...ESITO_FINALE_VALUES] as const;
 
 /** Colore evento calendario da esito / stato_adesione. */
-export function calendarEventColor(opts: {
-  esitoFinale?: string | null;
-  stato?: string | null;
-  statoAdesione?: string | null;
-  adesione?: boolean;
-  chiusa?: boolean;
-  meetingStartMs?: number | null;
-  nowMs?: number;
-}): string {
+export function calendarEventColor(opts: { esitoFinale?: string | null; stato?: string | null; statoAdesione?: string | null; adesione?: boolean; chiusa?: boolean; meetingStartMs?: number | null; nowMs?: number }): string {
   const key = calendarColorKey(opts);
   if (key in CALENDAR_STATO_COLORS) {
     return CALENDAR_STATO_COLORS[key as CalendarStatoKey];
@@ -264,10 +213,7 @@ export function calendarEventTextColor(bg: string): string {
 }
 
 /** Tipi azione post-esito raccomandata. */
-export const AZIONE_RACCOMANDATA_VALUES = [
-  "verbale_nessuna_risposta",
-  "comunicazione_mancata_consegna",
-] as const;
+export const AZIONE_RACCOMANDATA_VALUES = ["verbale_nessuna_risposta", "comunicazione_mancata_consegna"] as const;
 
 export type AzioneRaccomandata = (typeof AZIONE_RACCOMANDATA_VALUES)[number];
 
