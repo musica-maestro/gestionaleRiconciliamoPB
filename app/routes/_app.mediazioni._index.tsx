@@ -24,7 +24,7 @@ import { ESITO_FINALE_FILTER_OPTIONS } from "~/lib/esito-finale";
 import { AlertTriangle, Eye, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Download } from "lucide-react";
 const PER_PAGE_OPTIONS = [10, 25, 50, 100] as const;
 const SORT_FIELDS = ["rgm", "codice_univoco_cliente", "oggetto", "data_deposito", "data_protocollo", "data_chiusura", "esito_finale", "modalita_mediazione", "competenza", "mediatore_name", "stato", "data_assegnazione"] as const;
-const TABS = ["da-assegnare", "da-pianificare", "da-convocare", "aperte", "chiuse"] as const;
+const TABS = ["da-assegnare", "da-pianificare", "da-convocare", "aperte", "chiuse", "tutte"] as const;
 /** Chunk size for assign + letter generation so the UI can show progress. */
 const ASSIGN_BATCH_SIZE = 3;
 type Tab = (typeof TABS)[number];
@@ -98,6 +98,8 @@ function tabBaseFilter(tab: Tab): string {
       return `${FILTER_APERTE} && stato = "aperta"`;
     case "chiuse":
       return FILTER_CHIUSE;
+    case "tutte":
+      return "";
   }
 }
 
@@ -201,7 +203,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const filterParts: string[] = [];
   if (role === "mediatore") filterParts.push(`mediatore = "${user.id}"`);
-  filterParts.push(tabBaseFilter(effectiveTab));
+  const tabFilter = tabBaseFilter(effectiveTab);
+  if (tabFilter) filterParts.push(tabFilter);
   if (rgm) filterParts.push(pb.filter("rgm ~ {:rgm}", { rgm }));
   if (codice_cliente) {
     filterParts.push(
@@ -230,7 +233,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const roleScope = role === "mediatore" ? `mediatore = "${user.id}"` : "";
   const countFilter = (tabKey: Tab) => {
-    const parts = [tabBaseFilter(tabKey)];
+    const parts: string[] = [];
+    const base = tabBaseFilter(tabKey);
+    if (base) parts.push(base);
     if (roleScope) parts.unshift(roleScope);
     return parts.join(" && ");
   };
@@ -246,6 +251,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     countDaPianificare,
     countDaConvocare,
     countAperte,
+    countTutte,
   ] = await Promise.all([
     pb.collection("mediazioni_view").getList(page, perPage, {
       sort,
@@ -292,6 +298,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
       .getList(1, 1, { filter: countFilter("aperte"), ...noCancel })
       .then((r) => r.totalItems ?? 0)
       .catch(() => 0),
+    pb
+      .collection("mediazioni_view")
+      .getList(1, 1, {
+        ...(countFilter("tutte") ? { filter: countFilter("tutte") } : {}),
+        ...noCancel,
+      })
+      .then((r) => r.totalItems ?? 0)
+      .catch(() => 0),
   ]);
 
   const competenzeAttive = competenzeAttiveKeySet(
@@ -301,8 +315,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const mediazioni = result.items.map((m) => {
     const competenzaRaw = String(m.competenza ?? "").trim();
     const competenza = competenzaRaw || "—";
+    const competenzaAlertRisolto = Boolean(
+      (m as { competenza_alert_risolto?: boolean }).competenza_alert_risolto,
+    );
     const competenzaNonAttiva =
-      Boolean(competenzaRaw) && !isCompetenzaAttiva(competenzaRaw, competenzeAttive);
+      Boolean(competenzaRaw) &&
+      !isCompetenzaAttiva(competenzaRaw, competenzeAttive) &&
+      !competenzaAlertRisolto;
     return {
     id: String(m.id),
     rgm: String(m.rgm ?? "—"),
@@ -321,6 +340,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     avvocati: m.avvocati_testo ? String(m.avvocati_testo) : null,
     competenza,
     competenzaNonAttiva,
+    da_attenzionare: Boolean((m as { da_attenzionare?: boolean }).da_attenzionare),
     nota: m.nota ? stripHtml(String(m.nota)) : "—",
     adesione: Boolean((m as { adesione?: boolean }).adesione),
   };
@@ -344,6 +364,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       "da-pianificare": countDaPianificare,
       "da-convocare": countDaConvocare,
       aperte: countAperte,
+      tutte: countTutte,
     },
     filters: {
       rgm,
@@ -723,6 +744,7 @@ export default function MediazioniList() {
     { id: "da-convocare", label: "Da convocare", count: tabCounts["da-convocare"], show: true },
     { id: "aperte", label: "Aperte", count: tabCounts.aperte, show: true },
     { id: "chiuse", label: "Chiuse", show: true },
+    { id: "tutte", label: "Tutte", count: tabCounts.tutte, show: true },
   ];
 
   return (
@@ -1253,7 +1275,19 @@ export default function MediazioniList() {
                       </td>
                     )}
                     <td className="py-2">
-                      <span className="font-medium truncate block max-w-[90px]">{m.rgm}</span>
+                      <span className="inline-flex items-center gap-1 max-w-[110px]">
+                        <span className="font-medium truncate">{m.rgm}</span>
+                        {m.da_attenzionare && (
+                          <span
+                            className="tooltip tooltip-right inline-flex shrink-0 cursor-help"
+                            data-tip="Da attenzionare"
+                            title="Da attenzionare"
+                            aria-label="Da attenzionare"
+                          >
+                            <AlertTriangle className="h-3.5 w-3.5 text-red-600" aria-hidden="true" />
+                          </span>
+                        )}
+                      </span>
                     </td>
                     <td className="py-2 whitespace-nowrap">
                       {m.data_deposito ? new Date(m.data_deposito).toLocaleDateString("it-IT") : "—"}

@@ -115,6 +115,9 @@ export async function action({ request, params }: ActionFunctionArgs) {
     const competenza = competenzaRaw
       ? resolveCompetenzaNome(competenzaRaw, competenzeOpzioni)
       : undefined;
+    const data_deposito = formData.get("data_deposito")
+      ? String(formData.get("data_deposito"))
+      : undefined;
     const data_protocollo = formData.get("data_protocollo")
       ? String(formData.get("data_protocollo"))
       : undefined;
@@ -144,6 +147,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
       oggetto,
       valore,
       competenza,
+      data_deposito: data_deposito || null,
       data_protocollo: data_protocollo || null,
       data_chiusura: data_chiusura || null,
       data_avvio_entro: data_avvio_entro || null,
@@ -604,6 +608,18 @@ export async function action({ request, params }: ActionFunctionArgs) {
       azione_raccomandata_stato: "evasa",
     });
     return redirect(`/mediazioni/${id}`);
+  } else if (intent === "set_competenza_alert_risolto") {
+    const resolved = String(formData.get("risolto") ?? "") === "true";
+    await pb.collection("mediazioni").update(id, {
+      competenza_alert_risolto: resolved,
+    });
+    return redirect(`/mediazioni/${id}`);
+  } else if (intent === "set_da_attenzionare") {
+    const value = String(formData.get("value") ?? "") === "true";
+    await pb.collection("mediazioni").update(id, {
+      da_attenzionare: value,
+    });
+    return redirect(`/mediazioni/${id}`);
   } else if (intent === "create_lettera_incarico") {
     if (role !== "admin" && role !== "manager") {
       throw new Response("Forbidden", { status: 403 });
@@ -921,6 +937,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       codice_univoco_cliente: (mediazione as { codice_univoco_cliente?: string }).codice_univoco_cliente ?? "",
       created: (mediazione as { created?: string }).created ?? null,
       updated: (mediazione as { updated?: string }).updated ?? null,
+      data_deposito: mediazione.data_deposito ?? null,
       data_protocollo: mediazione.data_protocollo ?? null,
       oggetto: mediazione.oggetto ?? "",
       valore: mediazione.valore ?? "",
@@ -951,6 +968,10 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
       azione_raccomandata_nota: String(
         (mediazione as { azione_raccomandata_nota?: string }).azione_raccomandata_nota ?? "",
       ),
+      competenza_alert_risolto: Boolean(
+        (mediazione as { competenza_alert_risolto?: boolean }).competenza_alert_risolto,
+      ),
+      da_attenzionare: Boolean((mediazione as { da_attenzionare?: boolean }).da_attenzionare),
     },
     partecipazioni,
     incontri,
@@ -2585,11 +2606,12 @@ export default function MediazioneDetail() {
     );
   })();
 
-  const competenzaNonAttiva = (() => {
+  const competenzaFuoriSede = (() => {
     const value = (mediazione.competenza ?? "").trim();
     if (!value) return false;
     return !isCompetenzaAttiva(value, competenzaOpzioni);
   })();
+  const competenzaNonAttiva = competenzaFuoriSede && !mediazione.competenza_alert_risolto;
 
   const isSavingMediazione =
     navigation.state === "submitting" && navigation.formData?.get("_action") === "update";
@@ -2740,6 +2762,18 @@ export default function MediazioneDetail() {
         </div>
       </div>
 
+      {mediazione.da_attenzionare && (
+        <div
+          className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-red-900"
+          role="status"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" aria-hidden="true" />
+          <p className="text-xs sm:text-sm leading-relaxed">
+            Posizione segnalata come <strong>da attenzionare</strong>. Compare in rosso sul calendario.
+          </p>
+        </div>
+      )}
+
       {missingConvocazioniFiles && (
         <div
           className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-amber-900"
@@ -2858,6 +2892,7 @@ export default function MediazioneDetail() {
             <div className="space-y-2">
               <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 sm:grid-cols-3">
                 <InfoField label="RGM">{mediazione.rgm || "—"}</InfoField>
+                <InfoField label="Data deposito">{formatDate(mediazione.data_deposito)}</InfoField>
                 <InfoField label="Protocollo">{formatDate(mediazione.data_protocollo)}</InfoField>
                 <InfoField label="Mediatore">{mediazione.mediatore_name}</InfoField>
                 <InfoField label="Codice cliente" className="col-span-2 sm:col-span-3">
@@ -2889,6 +2924,30 @@ export default function MediazioneDetail() {
                     )}
                   </span>
                 </InfoField>
+                {competenzaFuoriSede && (
+                  <InfoField label="Alert competenza" wide>
+                    <Form method="post" className="inline-flex items-center gap-2">
+                      <input type="hidden" name="_action" value="set_competenza_alert_risolto" />
+                      <input
+                        type="hidden"
+                        name="risolto"
+                        value={mediazione.competenza_alert_risolto ? "false" : "true"}
+                      />
+                      <button
+                        type="submit"
+                        className={`rounded-md px-2 py-1 text-[11px] font-medium ${
+                          mediazione.competenza_alert_risolto
+                            ? "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                            : "border border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100"
+                        }`}
+                      >
+                        {mediazione.competenza_alert_risolto
+                          ? "Riapri alert competenza"
+                          : "Risolvi alert competenza"}
+                      </button>
+                    </Form>
+                  </InfoField>
+                )}
                 <InfoField label="Modalità">{mediazione.modalita_mediazione || "—"}</InfoField>
                 <InfoField label="Motivazione">{mediazione.motivazione_deposito || "—"}</InfoField>
                 {(mediazione.motivazione_deposito === "Disposta dal giudice" || mediazione.data_avvio_entro) && (
@@ -2929,16 +2988,42 @@ export default function MediazioneDetail() {
                     <StickyNote className="h-3 w-3" aria-hidden="true" />
                     Nota
                   </p>
-                  {!notaEditMode && (
-                    <button
-                      type="button"
-                      onClick={() => setNotaEditMode(true)}
-                      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[#2f8f99] hover:bg-white"
-                    >
-                      <Pencil className="h-3 w-3" aria-hidden="true" />
-                      {mediazione.nota ? "Modifica" : "Aggiungi"}
-                    </button>
-                  )}
+                  <div className="flex items-center gap-1.5">
+                    <Form method="post">
+                      <input type="hidden" name="_action" value="set_da_attenzionare" />
+                      <input
+                        type="hidden"
+                        name="value"
+                        value={mediazione.da_attenzionare ? "false" : "true"}
+                      />
+                      <button
+                        type="submit"
+                        className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                          mediazione.da_attenzionare
+                            ? "bg-red-100 text-red-700 hover:bg-red-200"
+                            : "text-slate-500 hover:bg-white hover:text-red-600"
+                        }`}
+                        title={
+                          mediazione.da_attenzionare
+                            ? "Rimuovi da attenzionare"
+                            : "Segna da attenzionare"
+                        }
+                      >
+                        <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+                        {mediazione.da_attenzionare ? "Da attenzionare" : "Attenzionare"}
+                      </button>
+                    </Form>
+                    {!notaEditMode && (
+                      <button
+                        type="button"
+                        onClick={() => setNotaEditMode(true)}
+                        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[#2f8f99] hover:bg-white"
+                      >
+                        <Pencil className="h-3 w-3" aria-hidden="true" />
+                        {mediazione.nota ? "Modifica" : "Aggiungi"}
+                      </button>
+                    )}
+                  </div>
                 </div>
                 {notaEditMode ? (
                   <Form method="post" className="mt-1.5 space-y-1.5">
@@ -3005,6 +3090,17 @@ export default function MediazioneDetail() {
                     <input
                       name="rgm"
                       defaultValue={mediazione.rgm}
+                      className={EDIT_FIELD_INPUT}
+                    />
+                  </dd>
+                </div>
+                <div>
+                  <dt className={EDIT_FIELD_LABEL}>Data deposito</dt>
+                  <dd>
+                    <input
+                      name="data_deposito"
+                      type="date"
+                      defaultValue={toInputDate(mediazione.data_deposito)}
                       className={EDIT_FIELD_INPUT}
                     />
                   </dd>

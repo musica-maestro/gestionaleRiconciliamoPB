@@ -5,6 +5,7 @@ import type { MetaFunction } from "@remix-run/node";
 import { ChevronDown, ChevronLeft, ChevronRight, Download, Menu, Search, X } from "lucide-react";
 import { getCurrentRole, requireUser } from "~/lib/auth.server";
 import {
+  CALENDAR_COLOR_DA_ATTENZIONARE,
   CALENDAR_STATO_COLORS,
   CALENDAR_STATO_LABELS,
   CALENDAR_STATO_VALUES,
@@ -49,12 +50,18 @@ const GCAL_COLORS = [
   "#7cb342",
 ] as const;
 
-const COLOR_LEGEND_STATI: { id: string; label: string; color: string }[] =
-  CALENDAR_STATO_VALUES.map((id) => ({
+const COLOR_LEGEND_STATI: { id: string; label: string; color: string }[] = [
+  {
+    id: "da_attenzionare",
+    label: "Da attenzionare",
+    color: CALENDAR_COLOR_DA_ATTENZIONARE,
+  },
+  ...CALENDAR_STATO_VALUES.map((id) => ({
     id,
     label: CALENDAR_STATO_LABELS[id],
     color: CALENDAR_STATO_COLORS[id],
-  }));
+  })),
+];
 
 const COLOR_LEGEND_ESITI: { id: string; label: string; color: string }[] =
   ESITO_FINALE_VALUES.map((label) => ({
@@ -95,6 +102,7 @@ type CalendarEvent = {
   avvocati: string;
   adesione: boolean;
   statoAdesione: string;
+  daAttenzionare: boolean;
 };
 
 type SearchHit = {
@@ -108,7 +116,10 @@ type SearchHit = {
 
 /** Same priority as calendarEventColor — used to toggle legend filters. */
 function colorKeyOf(
-  e: Pick<CalendarEvent, "esitoFinale" | "stato" | "statoAdesione" | "adesione" | "chiusa" | "startMs">,
+  e: Pick<
+    CalendarEvent,
+    "esitoFinale" | "stato" | "statoAdesione" | "adesione" | "chiusa" | "daAttenzionare" | "startMs"
+  >,
 ): CalendarStatusKey {
   return calendarColorKey({
     esitoFinale: e.esitoFinale,
@@ -116,14 +127,19 @@ function colorKeyOf(
     statoAdesione: e.statoAdesione,
     adesione: e.adesione,
     chiusa: e.chiusa,
+    daAttenzionare: e.daAttenzionare,
     meetingStartMs: e.startMs,
   });
 }
 
 function statusLabelOf(
-  e: Pick<CalendarEvent, "esitoFinale" | "stato" | "statoAdesione" | "adesione" | "chiusa" | "startMs">,
+  e: Pick<
+    CalendarEvent,
+    "esitoFinale" | "stato" | "statoAdesione" | "adesione" | "chiusa" | "daAttenzionare" | "startMs"
+  >,
 ): string {
   const key = colorKeyOf(e);
+  if (key === "da_attenzionare") return calendarColorLabel(key);
   if ((CALENDAR_STATO_VALUES as readonly string[]).includes(key)) {
     return calendarColorLabel(key as CalendarStatoKey);
   }
@@ -216,7 +232,10 @@ function hashColorIndex(id: string) {
 }
 
 function eventColor(
-  e: Pick<CalendarEvent, "esitoFinale" | "stato" | "statoAdesione" | "adesione" | "chiusa" | "startMs">,
+  e: Pick<
+    CalendarEvent,
+    "esitoFinale" | "stato" | "statoAdesione" | "adesione" | "chiusa" | "daAttenzionare" | "startMs"
+  >,
 ) {
   return calendarEventColor({
     esitoFinale: e.esitoFinale,
@@ -224,6 +243,7 @@ function eventColor(
     statoAdesione: e.statoAdesione,
     adesione: e.adesione,
     chiusa: e.chiusa,
+    daAttenzionare: e.daAttenzionare,
     meetingStartMs: e.startMs,
   });
 }
@@ -401,19 +421,19 @@ export async function loader({ request }: LoaderFunctionArgs) {
       : Promise.resolve([]),
   ]);
 
-  // Global RGM search hits (not limited to current view range)
+  // Global search hits (RGM / parti / avvocati — not limited to current view range)
   const searchHits: SearchHit[] = [];
   if (searchQ) {
     try {
       const escaped = searchQ.replace(/"/g, '\\"');
-      const medFilterParts = [`rgm ~ "${escaped}"`, `(is_deleted = false || is_deleted = null)`];
+      const textMatch = `(rgm ~ "${escaped}" || istanti_testo ~ "${escaped}" || chiamati_testo ~ "${escaped}" || avvocati_testo ~ "${escaped}")`;
+      const medFilterParts = [textMatch];
       if (role === "mediatore") {
         medFilterParts.push(`mediatore = "${user.id}"`);
       }
-      const mediazioniMatch = await pb.collection("mediazioni").getList(1, 20, {
+      const mediazioniMatch = await pb.collection("mediazioni_view").getList(1, 20, {
         filter: medFilterParts.join(" && "),
         fields: "id,rgm,mediatore",
-        expand: "mediatore",
         sort: "-updated",
         requestKey: null,
       });
@@ -574,6 +594,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         (mediazione as { stato_adesione?: string }).stato_adesione ??
           (mediazione.adesione ? "adesione" : "in_attesa"),
       ),
+      daAttenzionare: Boolean((mediazione as { da_attenzionare?: boolean }).da_attenzionare),
     });
   }
 
@@ -1746,7 +1767,7 @@ export default function CalendarioMediazioniPage() {
             <input
               type="search"
               className="w-full rounded-lg border border-[var(--cal-border)] bg-[var(--cal-bg)] py-1.5 pl-8 pr-8 text-sm text-[var(--cal-text)] placeholder:text-[var(--cal-muted)]"
-              placeholder="Cerca RGM…"
+              placeholder="Cerca RGM, parti, avvocati…"
               value={searchDraft}
               onChange={(e) => {
                 setSearchDraft(e.target.value);
@@ -1762,7 +1783,7 @@ export default function CalendarioMediazioniPage() {
                 // allow click on dropdown
                 window.setTimeout(() => setSearchOpen(false), 150);
               }}
-              aria-label="Cerca RGM nel calendario"
+              aria-label="Cerca RGM, parti o avvocati nel calendario"
             />
             {searchDraft && (
               <button

@@ -372,6 +372,8 @@ export type MediazioniRecord = {
   azione_raccomandata?: "verbale_nessuna_risposta" | "comunicazione_mancata_consegna" | ""
   azione_raccomandata_stato?: "da_fare" | "evasa" | ""
   azione_raccomandata_nota?: string
+  competenza_alert_risolto?: boolean
+  da_attenzionare?: boolean
   created?: IsoDateString
   updated?: IsoDateString
 }
@@ -398,6 +400,8 @@ export type MediazioniViewRecord = {
   proposta_mediatore?: boolean
   numero_esonerati_gratuito_patrocinio?: number
   materia_altro?: string
+  competenza_alert_risolto?: boolean
+  da_attenzionare?: boolean
   mediatore_name: string
   istanti_testo?: string
   chiamati_testo?: string

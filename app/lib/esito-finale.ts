@@ -11,13 +11,13 @@ export const ESITO_FINALE_FILTER_OPTIONS = ESITO_FINALE_VALUES.map((label) => ({
 
 /** Colori calendario / legenda per esito. */
 export const ESITO_FINALE_COLORS: Record<EsitoFinale, string> = {
-  Accordo: "#38bdf8", // skyblue
-  "Mancato accordo": "#1e3a8a", // dark blue
-  "Mancata comparizione": "#7c3aed", // violet
+  Accordo: "#86efac", // light green
+  "Mancato accordo": "#92400e", // brown
+  "Mancata comparizione": "#1e3a8a", // dark blue
   "Mancata adesione": "#111827", // black
   "Nessuna risposta": "#ec4899", // pink
-  "Chiusa d'ufficio": "#86efac", // light green
-  Ritirata: "#166534", // dark green
+  "Chiusa d'ufficio": "#ea580c", // orange
+  Ritirata: "#facc15", // yellow
 };
 
 /** Stato adesione esplicito su mediazioni (campo DB `stato_adesione`). */
@@ -37,11 +37,14 @@ export const CALENDAR_STATO_VALUES = ["in_attesa", "adesione", "mancata_adesione
 export type CalendarStatoKey = (typeof CALENDAR_STATO_VALUES)[number];
 
 export const CALENDAR_STATO_COLORS: Record<CalendarStatoKey, string> = {
-  in_attesa: "#d1d5db", // light gray
-  adesione: "#38bdf8", // sky
-  mancata_adesione: "#111827", // black — same as esito, distinta in legenda
-  chiusa: "#94a3b8", // slate
+  in_attesa: "#38bdf8", // sky / celeste
+  adesione: "#7c3aed", // violet
+  mancata_adesione: "#d1d5db", // light gray
+  chiusa: "#166534", // dark green
 };
+
+/** Flag manuale "da attenzionare" — priorità sul colore stato/esito in calendario. */
+export const CALENDAR_COLOR_DA_ATTENZIONARE = "#dc2626";
 
 export const CALENDAR_STATO_LABELS: Record<CalendarStatoKey, string> = {
   in_attesa: "In attesa",
@@ -77,7 +80,7 @@ export const CALENDAR_COLOR_DA_NOTIFICARE = "#facc15";
 /** @deprecated use CALENDAR_STATO_COLORS.in_attesa */
 export const CALENDAR_COLOR_NO_ESITO = CALENDAR_STATO_COLORS.in_attesa;
 
-export type CalendarStatusKey = CalendarStatoKey | EsitoFinale;
+export type CalendarStatusKey = CalendarStatoKey | EsitoFinale | "da_attenzionare";
 
 export function calendarColorKey(opts: {
   esitoFinale?: string | null;
@@ -88,9 +91,13 @@ export function calendarColorKey(opts: {
   adesione?: boolean;
   /** True when data_chiusura + esito are set. */
   chiusa?: boolean;
+  /** Flag manuale: priorità su esito/stato. */
+  daAttenzionare?: boolean;
   meetingStartMs?: number | null;
   nowMs?: number;
 }): CalendarStatusKey {
+  if (opts.daAttenzionare) return "da_attenzionare";
+
   const esito = String(opts.esitoFinale ?? "").trim();
 
   // Esito di chiusura ha priorità (inclusa Mancata adesione come esito)
@@ -184,9 +191,19 @@ export function normalizeEsitoFinale(raw: string): string {
 /** Opzioni select modifica mediazione (include vuoto). */
 export const ESITO_FINALE_FORM_OPTIONS = ["", ...ESITO_FINALE_VALUES] as const;
 
-/** Colore evento calendario da esito / stato_adesione. */
-export function calendarEventColor(opts: { esitoFinale?: string | null; stato?: string | null; statoAdesione?: string | null; adesione?: boolean; chiusa?: boolean; meetingStartMs?: number | null; nowMs?: number }): string {
+/** Colore evento calendario da esito / stato_adesione / da_attenzionare. */
+export function calendarEventColor(opts: {
+  esitoFinale?: string | null;
+  stato?: string | null;
+  statoAdesione?: string | null;
+  adesione?: boolean;
+  chiusa?: boolean;
+  daAttenzionare?: boolean;
+  meetingStartMs?: number | null;
+  nowMs?: number;
+}): string {
   const key = calendarColorKey(opts);
+  if (key === "da_attenzionare") return CALENDAR_COLOR_DA_ATTENZIONARE;
   if (key in CALENDAR_STATO_COLORS) {
     return CALENDAR_STATO_COLORS[key as CalendarStatoKey];
   }
@@ -195,6 +212,7 @@ export function calendarEventColor(opts: { esitoFinale?: string | null; stato?: 
 
 /** Etichetta legenda / agenda per lo stato colore. */
 export function calendarColorLabel(key: CalendarStatusKey): string {
+  if (key === "da_attenzionare") return "Da attenzionare";
   if (key in CALENDAR_STATO_LABELS) {
     return CALENDAR_STATO_LABELS[key as CalendarStatoKey];
   }
