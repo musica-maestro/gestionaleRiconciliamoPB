@@ -6,8 +6,8 @@ import {
   useNavigation,
   useSearchParams,
 } from "@remix-run/react";
-import { useState, useEffect, useRef, type ReactNode } from "react";
-import { AlertTriangle, Check, Copy, FileText, Mail, MoreVertical, Pencil, Plus, StickyNote, Trash2, UserPlus, X } from "lucide-react";
+import { useState, useEffect, useRef, type ChangeEvent, type DragEvent as ReactDragEvent, type ReactNode } from "react";
+import { AlertTriangle, Check, Copy, FileText, Mail, MoreVertical, Pencil, Plus, StickyNote, Trash2, Upload, UserPlus, X } from "lucide-react";
 import { json, redirect, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
 import type { MetaFunction } from "@remix-run/node";
 import { getCurrentRole, requireUser } from "~/lib/auth.server";
@@ -2159,12 +2159,58 @@ function AddDocumentoDialog({
   onClose: () => void;
   documentiTipi: Array<{ id: string; nome: string }>;
 }) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [fileName, setFileName] = useState("");
+  const [isDragging, setIsDragging] = useState(false);
+
   useEffect(() => {
     if (!isOpen) return;
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [isOpen, onClose]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setFileName("");
+      setIsDragging(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }, [isOpen]);
+
+  // Prevent Chrome from opening files when dragging over the page
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleDragOver = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes("Files")) {
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+      }
+    };
+    document.addEventListener("dragover", handleDragOver, false);
+    return () => document.removeEventListener("dragover", handleDragOver);
+  }, [isOpen]);
+
+  const assignFile = (file: File) => {
+    if (!fileInputRef.current) return;
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    fileInputRef.current.files = dt.files;
+    setFileName(file.name);
+  };
+
+  const handleDrop = (e: ReactDragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) assignFile(file);
+  };
+
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    setFileName(file?.name ?? "");
+  };
 
   if (!isOpen) return null;
 
@@ -2193,11 +2239,38 @@ function AddDocumentoDialog({
           </div>
           <div>
             <label className={EDIT_LABEL}>File <span className="text-red-500">*</span></label>
+            <div
+              className={`rounded-lg border-2 border-dashed px-4 py-6 text-center cursor-pointer transition-colors ${
+                isDragging
+                  ? "border-[#3aaeba] bg-[#3aaeba]/10"
+                  : "border-slate-300 hover:border-[#3aaeba]/60 hover:bg-slate-50"
+              }`}
+              onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); }}
+              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); e.dataTransfer.dropEffect = "copy"; }}
+              onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(false); }}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Upload className={`mx-auto mb-2 h-7 w-7 ${isDragging ? "text-[#3aaeba]" : "text-slate-300"}`} />
+              {fileName ? (
+                <>
+                  <p className="text-sm font-medium text-slate-800 truncate">{fileName}</p>
+                  <p className="mt-1 text-xs text-slate-400">Clicca o trascina per cambiare</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-medium text-slate-700">Trascina qui il file</p>
+                  <p className="mt-1 text-xs text-slate-400">oppure clicca per selezionarlo</p>
+                </>
+              )}
+            </div>
             <input
+              ref={fileInputRef}
               name="file"
               type="file"
               required
-              className="block w-full text-sm text-slate-700 file:mr-2 file:rounded file:border-0 file:bg-slate-200 file:px-2 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-300"
+              className="sr-only"
+              onChange={handleFileChange}
             />
           </div>
           <div>
