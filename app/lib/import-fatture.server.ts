@@ -9,6 +9,7 @@ import {
   normalizePersonKey,
   normalizeRgmKey,
   notaMatchesNumero,
+  scoreClienteLabel,
   yearFromISO,
   type FatturaImportRow,
 } from "~/lib/import-fatture-mapping";
@@ -62,89 +63,128 @@ function dateKey(value: string | null | undefined): string {
   return String(value).slice(0, 10);
 }
 
-function almostEqual(a: number | null | undefined, b: number | null | undefined): boolean {
+function almostEqual(a: number | null | undefined, b: number | null | undefined, eps = 0.02): boolean {
   if (a == null || b == null) return false;
-  return Math.abs(Number(a) - Number(b)) < 0.015;
+  return Math.abs(Number(a) - Number(b)) < eps;
 }
 
 function soggettoLabels(s: SoggettoLite | undefined): string[] {
   if (!s) return [];
   const labels: string[] = [];
-  const rs = normalizePersonKey(s.ragione_sociale || "");
-  if (rs) labels.push(rs);
-  const cognome = normalizePersonKey(s.cognome || "");
-  if (cognome) labels.push(cognome);
-  const full = normalizePersonKey([s.nome, s.cognome].filter(Boolean).join(" "));
-  if (full) labels.push(full);
-  const reverse = normalizePersonKey([s.cognome, s.nome].filter(Boolean).join(" "));
-  if (reverse && reverse !== full) labels.push(reverse);
+  const rs = s.ragione_sociale || "";
+  if (rs.trim()) labels.push(rs);
+  const cognome = s.cognome || "";
+  if (cognome.trim()) labels.push(cognome);
+  const full = [s.nome, s.cognome].filter(Boolean).join(" ");
+  if (full.trim()) labels.push(full);
+  const reverse = [s.cognome, s.nome].filter(Boolean).join(" ");
+  if (reverse.trim() && reverse !== full) labels.push(reverse);
   return labels;
 }
 
-function matchPartecipazione(
-  parti: PartecipazioneLite[],
-  cliente: string
-): { ok: true; parte: PartecipazioneLite } | { ok: false; reason: string } {
-  const key = normalizePersonKey(cliente);
-  if (!key) return { ok: false, reason: "Cliente vuoto" };
-
-  const exact: PartecipazioneLite[] = [];
-  const partial: PartecipazioneLite[] = [];
-
-  for (const p of parti) {
-    const labels = soggettoLabels(p.expand?.soggetto);
-    if (labels.some((l) => l === key)) {
-      exact.push(p);
-      continue;
-    }
-    if (
-      labels.some(
-        (l) =>
-          l === key ||
-          l.startsWith(key + " ") ||
-          l.endsWith(" " + key) ||
-          key.startsWith(l + " ") ||
-          key.endsWith(" " + l) ||
-          l.includes(key) ||
-          key.includes(l)
-      )
-    ) {
-      partial.push(p);
-    }
+function bestScoreForParte(p: PartecipazioneLite, cliente: string): number {
+  let best = 0;
+  for (const label of soggettoLabels(p.expand?.soggetto)) {
+    best = Math.max(best, scoreClienteLabel(cliente, label));
   }
-
-  if (exact.length === 1) return { ok: true, parte: exact[0]! };
-  if (exact.length > 1) return { ok: false, reason: `Parte ambigua (exact): ${cliente}` };
-  if (partial.length === 1) return { ok: true, parte: partial[0]! };
-  if (partial.length > 1) return { ok: false, reason: `Parte ambigua: ${cliente}` };
-  return { ok: false, reason: `Parte non trovata: ${cliente}` };
+  return best;
 }
 
+/**
+ * Fuzzy match partecipazione. If multiple winners share the same soggetto, prefer
+ * the one that already has fatture (optional hint via fattureByParte).
+ */
+function matchPartecipazione(
+  parti: PartecipazioneLite[],
+  cliente: string,
+  opts: { preferParteIds?: Set<string> } = {}
+): { ok: true; parte: PartecipazioneLite } | { ok: false; reason: string } {
+  if (!normalizePersonKey(cliente)) return { ok: false, reason: "Cliente vuoto" };
+
+  // Slash / compound: "LUCISANO/TUCCI M" — try each side and take best unique
+  const variants = cliente.includes("/")
+    ? [cliente, ...cliente.split("/").map((p) => p.trim()).filter(Boolean)]
+    : [cliente];
+
+  type Scored = { p: PartecipazioneLite; score: number };
+  const scored: Scored[] = [];
+  for (const p of parti) {
+    let score = 0;
+    for (const v of variants) score = Math.max(score, bestScoreForParte(p, v));
+    if (score >= 55) scored.push({ p, score });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  if (scored.length === 0) return { ok: false, reason: `Parte non trovata: ${cliente}` };
+
+  const best = scored[0]!.score;
+  let winners = scored.filter((s) => s.score >= best - 5);
+
+  if (winners.length > 1 && opts.preferParteIds?.size) {
+    const preferred = winners.filter((w) => opts.preferParteIds!.has(w.p.id));
+    if (preferred.length === 1) winners = preferred;
+    else if (preferred.length > 1) winners = preferred;
+  }
+
+  // Same soggetto on multiple partecipazioni → pick one (prefer with fatture hint, else first)
+  if (winners.length > 1) {
+    const sogIds = new Set(winners.map((w) => w.p.soggetto));
+    if (sogIds.size === 1) {
+      const withHint = winners.find((w) => opts.preferParteIds?.has(w.p.id));
+      return { ok: true, parte: (withHint ?? winners[0]!).p };
+    }
+    // Distinct people still ambiguous (e.g. Lucisano Federica vs Paola)
+    return { ok: false, reason: `Parte ambigua: ${cliente}` };
+  }
+
+  return { ok: true, parte: winners[0]!.p };
+}
+
+function fattureMatchingNumero(
+  fatture: FatturaLite[],
+  numero: string,
+  year: string | null
+): FatturaLite[] {
+  const out: FatturaLite[] = [];
+  for (const f of fatture) {
+    const num = String(f.numero_fattura ?? "").trim();
+    if (num && num === numero) {
+      out.push(f);
+      continue;
+    }
+    if (notaMatchesNumero(f.nota, numero, year)) {
+      out.push(f);
+      continue;
+    }
+    // "Fatt. 3/2024 (rata 1/3)" — match numero even if year filter failed on partial nota
+    const m = String(f.nota ?? "").match(/fatt\.?\s*(\d+)\s*\/\s*(\d{4})/i);
+    if (m && m[1] === numero && (!year || m[2] === year)) out.push(f);
+  }
+  return out;
+}
+
+function sumImponibile(list: FatturaLite[]): number {
+  return list.reduce((a, f) => a + (Number(f.imponibile) || 0), 0);
+}
+
+/**
+ * Match one fattura, or a rate-bundle (same numero, rates that sum to Excel total).
+ */
 function matchFattura(
   fatture: FatturaLite[],
   row: FatturaImportRow
-): { ok: true; fattura: FatturaLite } | { ok: false; reason: "not_found" | "ambiguous"; detail: string } {
+):
+  | { ok: true; fatture: FatturaLite[]; mode: "single" | "rate_bundle" }
+  | { ok: false; reason: "not_found" | "ambiguous"; detail: string } {
   if (fatture.length === 0) {
     return { ok: false, reason: "not_found", detail: "Nessuna fattura esistente per la parte" };
   }
 
   const year = yearFromISO(row.data_emissione);
-  const byNumero: FatturaLite[] = [];
+  let candidates: FatturaLite[] = [];
 
   if (row.numero_fattura) {
-    for (const f of fatture) {
-      const num = String(f.numero_fattura ?? "").trim();
-      if (num && num === row.numero_fattura) {
-        byNumero.push(f);
-        continue;
-      }
-      if (notaMatchesNumero(f.nota, row.numero_fattura, year)) {
-        byNumero.push(f);
-      }
-    }
+    candidates = fattureMatchingNumero(fatture, row.numero_fattura, year);
   }
-
-  let candidates = byNumero;
 
   if (candidates.length === 0 && row.imponibile != null) {
     candidates = fatture.filter((f) => almostEqual(f.imponibile, row.imponibile));
@@ -152,22 +192,52 @@ function matchFattura(
       const dated = candidates.filter((f) => dateKey(f.data_emissione_fattura) === row.data_emissione);
       if (dated.length > 0) candidates = dated;
     }
-  } else if (candidates.length > 1 && row.imponibile != null) {
-    const byImp = candidates.filter((f) => almostEqual(f.imponibile, row.imponibile));
-    if (byImp.length > 0) candidates = byImp;
   }
 
   if (candidates.length === 0) {
     return { ok: false, reason: "not_found", detail: "Fattura esistente non trovata" };
   }
-  if (candidates.length > 1) {
-    return {
-      ok: false,
-      reason: "ambiguous",
-      detail: `Fattura ambigua (${candidates.length} match)`,
-    };
+
+  if (candidates.length === 1) {
+    return { ok: true, fatture: candidates, mode: "single" };
   }
-  return { ok: true, fattura: candidates[0]! };
+
+  // Multiple with same numero: try exact imponibile (single rate line)
+  if (row.imponibile != null) {
+    const byImp = candidates.filter((f) => almostEqual(f.imponibile, row.imponibile));
+    if (byImp.length === 1) {
+      return { ok: true, fatture: byImp, mode: "single" };
+    }
+    // Excel total == sum of all rows with that numero → rate division (OK)
+    const sum = sumImponibile(candidates);
+    if (almostEqual(sum, row.imponibile, 0.05)) {
+      return { ok: true, fatture: candidates, mode: "rate_bundle" };
+    }
+    // Excel total == sum of only "(rata …)" rows (exclude the full invoice twin)
+    const rateOnly = candidates.filter((f) => /rata/i.test(String(f.nota ?? "")));
+    if (rateOnly.length >= 2 && almostEqual(sumImponibile(rateOnly), row.imponibile, 0.05)) {
+      return { ok: true, fatture: rateOnly, mode: "rate_bundle" };
+    }
+  } else if (row.numero_fattura) {
+    // No imponibile on Excel but same numero → update all rate rows' metadata
+    return { ok: true, fatture: candidates, mode: "rate_bundle" };
+  }
+
+  // Identical duplicates (same n + same imp twice): update first only
+  if (
+    candidates.length === 2 &&
+    row.imponibile != null &&
+    almostEqual(candidates[0]!.imponibile, candidates[1]!.imponibile) &&
+    almostEqual(candidates[0]!.imponibile, row.imponibile)
+  ) {
+    return { ok: true, fatture: [candidates[0]!], mode: "single" };
+  }
+
+  return {
+    ok: false,
+    reason: "ambiguous",
+    detail: `Fattura ambigua (${candidates.length} match)`,
+  };
 }
 
 function buildNota(row: FatturaImportRow): string | undefined {
@@ -333,7 +403,26 @@ export async function importFattureRows(
     }
 
     const parti = indexes.partiByMediazione.get(med.id) ?? [];
-    const parteMatch = matchPartecipazione(parti, row.cliente);
+    // Prefer partecipazioni that already have fatture (helps duplicate Istante/Chiamato same person)
+    const preferParteIds = new Set<string>();
+    for (const p of parti) {
+      const fl = indexes.fattureByParte.get(p.id) ?? [];
+      if (fl.length === 0) continue;
+      if (row.numero_fattura) {
+        const year = yearFromISO(row.data_emissione);
+        if (fattureMatchingNumero(fl, row.numero_fattura, year).length > 0) {
+          preferParteIds.add(p.id);
+          continue;
+        }
+      }
+      if (row.imponibile != null && fl.some((f) => almostEqual(f.imponibile, row.imponibile))) {
+        preferParteIds.add(p.id);
+      } else if (!row.numero_fattura) {
+        preferParteIds.add(p.id);
+      }
+    }
+
+    const parteMatch = matchPartecipazione(parti, row.cliente, { preferParteIds });
     if (!parteMatch.ok) {
       skipped++;
       errors.push({ index: row.index, error: parteMatch.reason, rgm: row.rgm, cliente: row.cliente });
@@ -344,31 +433,37 @@ export async function importFattureRows(
     const fattMatch = matchFattura(fatture, row);
 
     if (fattMatch.ok) {
-      const patch = buildUpdatePayload(fattMatch.fattura, row);
-      if (!patch) {
-        skipped++;
-        continue;
-      }
+      let anyPatched = false;
+      for (const fattura of fattMatch.fatture) {
+        // For rate bundles, never overwrite per-rate imponibile with the Excel total
+        const rowForPatch =
+          fattMatch.mode === "rate_bundle"
+            ? { ...row, imponibile: null as number | null }
+            : row;
+        const patch = buildUpdatePayload(fattura, rowForPatch);
+        if (!patch) continue;
+        anyPatched = true;
 
-      if (dryRun) {
-        touchedIds.add(fattMatch.fattura.id);
-        updated++;
-        continue;
-      }
+        if (dryRun) {
+          touchedIds.add(fattura.id);
+          continue;
+        }
 
-      try {
-        await pb.collection("fatture").update(fattMatch.fattura.id, patch);
-        Object.assign(fattMatch.fattura, patch);
-        touchedIds.add(fattMatch.fattura.id);
-        updated++;
-      } catch (e) {
-        errors.push({
-          index: row.index,
-          error: e instanceof Error ? e.message : "Update fallito",
-          rgm: row.rgm,
-          cliente: row.cliente,
-        });
+        try {
+          await pb.collection("fatture").update(fattura.id, patch);
+          Object.assign(fattura, patch);
+          touchedIds.add(fattura.id);
+        } catch (e) {
+          errors.push({
+            index: row.index,
+            error: e instanceof Error ? e.message : "Update fallito",
+            rgm: row.rgm,
+            cliente: row.cliente,
+          });
+        }
       }
+      if (anyPatched) updated++;
+      else skipped++;
       continue;
     }
 
