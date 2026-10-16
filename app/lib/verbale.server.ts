@@ -170,17 +170,35 @@ export function resolveModelloVerbaleNome(opts: {
   return { nome };
 }
 
+function titoloMediatoreFromSesso(sesso: string | null | undefined): string {
+  const female = String(sesso ?? "").toLowerCase() === "female";
+  return female ? "Mediatrice Dott.ssa" : "Mediatore Dott.";
+}
+
 export function buildVerbaleMergeData(opts: {
   mediazione: Record<string, unknown>;
   mediatoreName: string;
+  mediatoreSesso?: string | null;
   istante: SoggettoLite | null;
   chiamato: SoggettoLite | null;
   avvIstante: AvvocatoLite | null;
   avvChiamato: AvvocatoLite | null;
   incontroDate: Date | null;
+  numeroRaccomandataChiamato?: string;
+  dataInvioRaccomandataChiamato?: Date | null;
 }): Record<string, string> {
-  const { mediazione, mediatoreName, istante, chiamato, avvIstante, avvChiamato, incontroDate } =
-    opts;
+  const {
+    mediazione,
+    mediatoreName,
+    mediatoreSesso = null,
+    istante,
+    chiamato,
+    avvIstante,
+    avvChiamato,
+    incontroDate,
+    numeroRaccomandataChiamato = "",
+    dataInvioRaccomandataChiamato = null,
+  } = opts;
 
   const oggettoRaw = String(mediazione.oggetto ?? "").trim();
   const materiaAltro = String(mediazione.materia_altro ?? "").trim();
@@ -205,6 +223,7 @@ export function buildVerbaleMergeData(opts: {
       ? `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`
       : "",
     MEDIATORE: mediatoreName.trim(),
+    TITOLO_MEDIATORE: titoloMediatoreFromSesso(mediatoreSesso),
     DATA_DEPOSITO: deposito ? formatDataSlash(deposito) : "",
     ISTANTE: soggettoDisplayName(istante),
     CF_ISTANTE: soggettoCf(istante),
@@ -219,6 +238,10 @@ export function buildVerbaleMergeData(opts: {
     AVV_CHIAMATO: avvocatoDisplay(avvChiamato),
     Foro_Chiamato: String(avvChiamato?.foro_di_appartenenza ?? "").trim(),
     Tessera_Chiamato: String(avvChiamato?.numero_tessera_foro ?? "").trim(),
+    NUMERO_RACCOMANDATA_CHIAMATO: String(numeroRaccomandataChiamato ?? "").trim(),
+    DATA_INVIO_RACCOMANDATA_CHIAMATO: dataInvioRaccomandataChiamato
+      ? formatDataSlash(dataInvioRaccomandataChiamato)
+      : "",
   };
 }
 
@@ -306,7 +329,7 @@ export async function generateVerbaleDocx(
     partecipazioni.find(
       (p) => String((p as { istante_o_chiamato?: string }).istante_o_chiamato) === ruolo,
     ) as
-      | { soggetto?: unknown; avvocati?: unknown }
+      | { id?: string; soggetto?: unknown; avvocati?: unknown }
       | undefined;
 
   const istantePart = firstParte("Istante");
@@ -328,6 +351,27 @@ export async function generateVerbaleDocx(
     return (avvocatiById[id] as AvvocatoLite | undefined) ?? null;
   };
 
+  let numeroRaccomandataChiamato = "";
+  let dataInvioRaccomandataChiamato: Date | null = null;
+  const chiamatoPartecipazioneId = asId(chiamatoPart?.id);
+  if (chiamatoPartecipazioneId) {
+    try {
+      const racc = await pb.collection("convocazioni").getList(1, 1, {
+        filter: `partecipazione = "${chiamatoPartecipazioneId}" && tipologia = "Raccomandata"`,
+        sort: "-data_invio,-created",
+      });
+      const row = racc.items[0] as
+        | { numero_raccomandata?: string; data_invio?: string }
+        | undefined;
+      if (row) {
+        numeroRaccomandataChiamato = String(row.numero_raccomandata ?? "").trim();
+        dataInvioRaccomandataChiamato = parsePbDate(row.data_invio);
+      }
+    } catch {
+      // leave empty
+    }
+  }
+
   let incontro =
     opts?.incontroId
       ? (incontri as Record<string, unknown>[]).find((i) => String(i.id) === opts.incontroId)
@@ -338,17 +382,21 @@ export async function generateVerbaleDocx(
     parsePbDate(incontro?.data_programmazione);
 
   const expand = mediazione.expand as Record<string, unknown> | undefined;
-  const mediatore = expand?.mediatore as { name?: string } | undefined;
+  const mediatore = expand?.mediatore as { name?: string; sesso?: string } | undefined;
   const mediatoreName = String(mediatore?.name ?? "").trim();
+  const mediatoreSesso = String(mediatore?.sesso ?? "").trim() || null;
 
   const data = buildVerbaleMergeData({
     mediazione,
     mediatoreName,
+    mediatoreSesso,
     istante,
     chiamato,
     avvIstante: firstAvv(istantePart),
     avvChiamato: firstAvv(chiamatoPart),
     incontroDate,
+    numeroRaccomandataChiamato,
+    dataInvioRaccomandataChiamato,
   });
 
   const filled = await fillWordMergeFields(loaded.buffer, data);

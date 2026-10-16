@@ -90,6 +90,11 @@ export const VERBALE_MERGE_FIELDS = [
   { name: "ORE", source: "incontri.data_programmazione", note: "Ora HH:MM" },
   { name: "MEDIATORE", source: "users.name (mediatore)", note: "Nome mediatore" },
   {
+    name: "TITOLO_MEDIATORE",
+    source: "users.sesso (mediatore)",
+    note: 'female → "Mediatrice Dott.ssa", altrimenti "Mediatore Dott."',
+  },
+  {
     name: "DATA_DEPOSITO",
     source: "mediazioni.data_deposito || data_protocollo",
     note: "Data deposito dd/MM/yyyy (Europe/Rome)",
@@ -136,6 +141,16 @@ export const VERBALE_MERGE_FIELDS = [
     name: "Tessera_Chiamato",
     source: "avvocati.numero_tessera_foro (chiamato)",
     note: "Opzionale per modelli nuovi",
+  },
+  {
+    name: "NUMERO_RACCOMANDATA_CHIAMATO",
+    source: "convocazioni.numero_raccomandata (parte chiamata, ultima Raccomandata)",
+    note: "N. raccomandata inviata al chiamato",
+  },
+  {
+    name: "DATA_INVIO_RACCOMANDATA_CHIAMATO",
+    source: "convocazioni.data_invio (parte chiamata, ultima Raccomandata)",
+    note: "Data invio raccomandata al chiamato (dd/MM/yyyy)",
   },
 ] as const;
 

@@ -2,7 +2,9 @@ import { Form, useLoaderData, useSearchParams } from "@remix-run/react";
 import { json, redirect, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
 import { useState, type ComponentType } from "react";
 import {
+  Check,
   CheckCircle2,
+  Copy,
   Download,
   FileText,
   FolderOpen,
@@ -616,6 +618,37 @@ function FixedModelloCard({
   );
 }
 
+function VerbalePlaceholderPill({ name }: { name: string }) {
+  const text = `#${name}#`;
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // ignore
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title={copied ? "Copiato" : `Copia ${text}`}
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-mono transition-colors ${
+        copied
+          ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+          : "border-base-300 bg-base-200 text-base-content/80 hover:border-[#3aaeba] hover:bg-[#3aaeba]/10"
+      }`}
+    >
+      <span>{text}</span>
+      {copied ? <Check className="h-3 w-3 shrink-0" /> : <Copy className="h-3 w-3 shrink-0 opacity-70" />}
+    </button>
+  );
+}
+
 function VerbalePlaceholdersInfo({
   open,
   onClose,
@@ -643,7 +676,7 @@ function VerbalePlaceholdersInfo({
               <code className="rounded bg-base-200 px-1">#</code>, es.{" "}
               <code className="rounded bg-base-200 px-1">#RGM#</code>. Cerca{" "}
               <code className="rounded bg-base-200 px-1">#</code> nel documento per trovarli tutti.
-              In generazione vengono sostituiti con i dati della mediazione.
+              Clicca sulla pill per copiare il campo.
             </p>
           </div>
           <button
@@ -668,7 +701,7 @@ function VerbalePlaceholdersInfo({
               {fields.map((f) => (
                 <tr key={f.name}>
                   <td>
-                    <code className="rounded bg-base-200 px-1.5 py-0.5 text-xs">#{f.name}#</code>
+                    <VerbalePlaceholderPill name={f.name} />
                   </td>
                   <td className="text-xs text-base-content/80">{f.source}</td>
                   <td className="text-xs text-base-content/65">{f.note}</td>
