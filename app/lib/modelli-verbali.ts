@@ -120,11 +120,20 @@ export const VERBALE_MERGE_FIELDS = [
     source: "avvocati.numero_tessera_foro (istante)",
     note: "N. tessera foro avvocato istante",
   },
-  { name: "NOME_CHIAMATO", source: "soggetti.nome (primo chiamato PF)", note: "Nome chiamato" },
+  {
+    name: "NOME_CHIAMATO",
+    source: "soggetti.nome (PF) oppure ragione_sociale (PG)",
+    note: "Nome chiamato; se PG contiene la ragione sociale",
+  },
   {
     name: "COGNOME_CHIAMATO",
-    source: "soggetti.cognome o ragione_sociale (PG)",
-    note: "Cognome chiamato / RS se giuridica",
+    source: "soggetti.cognome (PF); vuoto se PG",
+    note: "Cognome chiamato (vuoto per persona giuridica)",
+  },
+  {
+    name: "CHIAMATO",
+    source: "nome+cognome oppure ragione_sociale",
+    note: "Nome completo chiamato (un solo campo)",
   },
   { name: "CF_CHIAMATO", source: "soggetti.codice_fiscale (chiamato)", note: "CF chiamato" },
   {

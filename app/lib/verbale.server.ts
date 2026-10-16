@@ -211,6 +211,15 @@ export function buildVerbaleMergeData(opts: {
   const p = incontroDate ? partsInRome(incontroDate) : null;
   const isChiamatoGiuridica = String(chiamato?.tipo ?? "") === "Giuridica";
 
+  // PG: metti la ragione sociale in NOME e lascia COGNOME vuoto, così
+  // `#NOME_CHIAMATO# #COGNOME_CHIAMATO#` non diventa " BETA SRL" / spezzato.
+  const nomeChiamato = isChiamatoGiuridica
+    ? String(chiamato?.ragione_sociale ?? "").trim()
+    : String(chiamato?.nome ?? "").trim();
+  const cognomeChiamato = isChiamatoGiuridica
+    ? ""
+    : String(chiamato?.cognome ?? "").trim();
+
   return {
     RGM: String(mediazione.rgm ?? "").trim(),
     COMPETENZA: String(mediazione.competenza ?? "").trim(),
@@ -230,10 +239,9 @@ export function buildVerbaleMergeData(opts: {
     AVV_ISTANTE: avvocatoDisplay(avvIstante),
     Foro_: String(avvIstante?.foro_di_appartenenza ?? "").trim(),
     Tessera: String(avvIstante?.numero_tessera_foro ?? "").trim(),
-    NOME_CHIAMATO: isChiamatoGiuridica ? "" : String(chiamato?.nome ?? "").trim(),
-    COGNOME_CHIAMATO: isChiamatoGiuridica
-      ? String(chiamato?.ragione_sociale ?? "").trim()
-      : String(chiamato?.cognome ?? "").trim(),
+    NOME_CHIAMATO: nomeChiamato,
+    COGNOME_CHIAMATO: cognomeChiamato,
+    CHIAMATO: soggettoDisplayName(chiamato),
     CF_CHIAMATO: soggettoCf(chiamato),
     AVV_CHIAMATO: avvocatoDisplay(avvChiamato),
     Foro_Chiamato: String(avvChiamato?.foro_di_appartenenza ?? "").trim(),

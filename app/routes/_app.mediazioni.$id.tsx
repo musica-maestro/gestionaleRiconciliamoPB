@@ -294,10 +294,46 @@ export async function action({ request, params }: ActionFunctionArgs) {
     });
     return redirect(`/mediazioni/${id}?tab=parti`);
   } else if (intent === "delete_partecipazione") {
-    const partecipazione_id = formData.get("partecipazione_id");
+    const partecipazione_id = String(formData.get("partecipazione_id") ?? "");
     if (!partecipazione_id) return redirect(`/mediazioni/${id}?tab=parti`);
-    await pb.collection("partecipazioni").delete(String(partecipazione_id));
-    return redirect(`/mediazioni/${id}?tab=parti`);
+    try {
+      // Fatture require partecipazione → block with a clear message
+      const linkedFatture = await pb.collection("fatture").getFullList({
+        filter: `partecipazione = "${partecipazione_id}"`,
+        fields: "id",
+        limit: 1,
+      });
+      if (linkedFatture.length > 0) {
+        return json(
+          {
+            toast: "error" as const,
+            mediazioneId: id,
+            message:
+              "Impossibile eliminare la parte: esistono fatture collegate. Elimina prima le fatture.",
+          },
+          { status: 422 }
+        );
+      }
+      // Convocazioni can be removed with the parte
+      const linkedConv = await pb.collection("convocazioni").getFullList({
+        filter: `partecipazione = "${partecipazione_id}"`,
+        fields: "id",
+      });
+      for (const c of linkedConv) {
+        await pb.collection("convocazioni").delete(c.id);
+      }
+      await pb.collection("partecipazioni").delete(partecipazione_id);
+      return redirect(`/mediazioni/${id}?tab=parti`);
+    } catch (e) {
+      return json(
+        {
+          toast: "error" as const,
+          mediazioneId: id,
+          message: pocketBaseErrorMessage(e),
+        },
+        { status: 422 }
+      );
+    }
   } else if (intent === "create_soggetto_and_partecipazione") {
     const tipo = String(formData.get("tipo") ?? "").trim();
     const istante_o_chiamato = String(formData.get("istante_o_chiamato") ?? "").trim();
