@@ -1,6 +1,7 @@
-import { useState } from "react";
-import { Outlet } from "@remix-run/react";
+import { useMemo, useState } from "react";
+import { Outlet, useLocation } from "@remix-run/react";
 import { json, type LoaderFunctionArgs } from "@remix-run/node";
+import { Download } from "lucide-react";
 import { requireUser } from "~/lib/auth.server";
 import { NewRubricaEntryDialog } from "~/components/new-rubrica-entry-dialog";
 
@@ -11,12 +12,29 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 export default function RubricaLayout() {
   const [newEntryDialogOpen, setNewEntryDialogOpen] = useState(false);
+  const location = useLocation();
+
+  const exportUrl = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    params.delete("page");
+    params.delete("per_page");
+    const qs = params.toString();
+    return qs ? `/rubrica/export?${qs}` : "/rubrica/export";
+  }, [location.search]);
+
+  const isIndex = location.pathname === "/rubrica" || location.pathname === "/rubrica/";
 
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
         <h1 className="text-2xl font-semibold text-base-content shrink-0">Rubrica</h1>
         <div className="flex gap-2 flex-shrink-0">
+          {isIndex && (
+            <a href={exportUrl} className="btn btn-outline btn-sm gap-1">
+              <Download className="h-3.5 w-3.5" />
+              Esporta
+            </a>
+          )}
           <button
             type="button"
             onClick={() => setNewEntryDialogOpen(true)}

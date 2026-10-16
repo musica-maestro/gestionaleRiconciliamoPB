@@ -16,10 +16,13 @@ function xmlEscape(value: string): string {
     .replace(/'/g, "&apos;");
 }
 
-/** Display variants used in Word MERGEFIELD templates. */
+/** Display variants used in Word MERGEFIELD / placeholder templates. */
 function mergeFieldNeedles(fieldName: string): string[] {
   const trimmed = fieldName.trim();
   return [
+    // Verbali: `#CAMPO#` (e `#CAMPO`) — easy to find with Ctrl+F on "#"
+    `#${trimmed}#`,
+    `#${trimmed}`,
     `\u00ab${trimmed}\u00bb`,
     `&lt;${trimmed}&gt;`,
     `<${trimmed}>`,
@@ -149,10 +152,134 @@ export function cleanupEmptyAddressArtifacts(xml: string): string {
   return xml;
 }
 
+function lookupMergeValue(data: Record<string, string>, fieldName: string): string {
+  if (Object.prototype.hasOwnProperty.call(data, fieldName)) {
+    return data[fieldName] ?? "";
+  }
+  const lower = fieldName.toLowerCase();
+  const key = Object.keys(data).find((k) => k.toLowerCase() === lower);
+  return key ? (data[key] ?? "") : "";
+}
+
+/**
+ * Replace the result text of Word complex MERGEFIELD fields (begin/separate/end).
+ * Templates from "stampa unione" keep sample values as display text, not «campo».
+ */
+export function replaceMergeFieldResults(
+  xml: string,
+  data: Record<string, string>,
+): string {
+  const beginMarker = 'w:fldCharType="begin"';
+  const pieces: string[] = [];
+  let searchFrom = 0;
+
+  while (true) {
+    const beginIdx = xml.indexOf(beginMarker, searchFrom);
+    if (beginIdx === -1) {
+      pieces.push(xml.slice(searchFrom));
+      break;
+    }
+
+    const runStart = xml.lastIndexOf("<w:r", beginIdx);
+    if (runStart < searchFrom) {
+      pieces.push(xml.slice(searchFrom, beginIdx + beginMarker.length));
+      searchFrom = beginIdx + beginMarker.length;
+      continue;
+    }
+
+    const separateIdx = xml.indexOf('w:fldCharType="separate"', beginIdx);
+    const endIdx = xml.indexOf('w:fldCharType="end"', beginIdx);
+    if (endIdx === -1) {
+      pieces.push(xml.slice(searchFrom, beginIdx + beginMarker.length));
+      searchFrom = beginIdx + beginMarker.length;
+      continue;
+    }
+    // Ignore a "separate" that belongs to a later field.
+    const separateInThisField =
+      separateIdx !== -1 && separateIdx < endIdx ? separateIdx : -1;
+
+    const endRunEnd = xml.indexOf("</w:r>", endIdx);
+    if (endRunEnd === -1) {
+      pieces.push(xml.slice(searchFrom, beginIdx + beginMarker.length));
+      searchFrom = beginIdx + beginMarker.length;
+      continue;
+    }
+    const fieldEnd = endRunEnd + "</w:r>".length;
+    const fieldBlock = xml.slice(runStart, fieldEnd);
+
+    const instr = [...fieldBlock.matchAll(/<w:instrText[^>]*>([\s\S]*?)<\/w:instrText>/g)]
+      .map((m) => m[1])
+      .join("")
+      .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, "&");
+    const mergeMatch = instr.match(/MERGEFIELD\s+([^\s\\]+)/i);
+
+    pieces.push(xml.slice(searchFrom, runStart));
+
+    if (!mergeMatch) {
+      pieces.push(fieldBlock);
+      searchFrom = fieldEnd;
+      continue;
+    }
+
+    const value = lookupMergeValue(data, mergeMatch[1]);
+    const escaped = xmlEscape(value);
+    const resultRun = `<w:r><w:t xml:space="preserve">${escaped}</w:t></w:r>`;
+    const endRunStart = fieldBlock.lastIndexOf(
+      "<w:r",
+      fieldBlock.indexOf('w:fldCharType="end"'),
+    );
+
+    if (separateInThisField === -1) {
+      // begin → instr → end (no result yet): inject display text before end.
+      if (endRunStart < 0) {
+        pieces.push(fieldBlock);
+      } else {
+        pieces.push(fieldBlock.slice(0, endRunStart) + resultRun + fieldBlock.slice(endRunStart));
+      }
+      searchFrom = fieldEnd;
+      continue;
+    }
+
+    const sepClose = fieldBlock.indexOf(
+      "</w:r>",
+      fieldBlock.indexOf('w:fldCharType="separate"'),
+    );
+    const sepRunEnd = sepClose + "</w:r>".length;
+    if (sepClose === -1 || endRunStart < sepRunEnd) {
+      pieces.push(fieldBlock);
+      searchFrom = fieldEnd;
+      continue;
+    }
+
+    const before = fieldBlock.slice(0, sepRunEnd);
+    const middle = fieldBlock.slice(sepRunEnd, endRunStart);
+    const after = fieldBlock.slice(endRunStart);
+
+    let replaced = false;
+    const newMiddle = middle.replace(/<w:t([^>]*)>[\s\S]*?<\/w:t>/g, (_full, attrs: string) => {
+      if (replaced) {
+        return `<w:t${attrs}></w:t>`;
+      }
+      replaced = true;
+      const needsSpace =
+        !/\bxml:space\s*=/.test(attrs) &&
+        (value.startsWith(" ") || value.endsWith(" ") || value.includes("  "));
+      const nextAttrs = needsSpace ? `${attrs} xml:space="preserve"` : attrs;
+      return `<w:t${nextAttrs}>${escaped}</w:t>`;
+    });
+
+    pieces.push(replaced ? before + newMiddle + after : before + resultRun + after);
+    searchFrom = fieldEnd;
+  }
+
+  return pieces.join("");
+}
+
 /**
  * Fill Word MERGEFIELD placeholders in a DOCX buffer, then unlink fields to
  * plain text so PDF conversion keeps the values.
- * Supports «field», &lt;field&gt;, and <field> display text.
+ * Supports real MERGEFIELD result runs, plus «field», &lt;field&gt;, and <field> display text.
  */
 export async function fillWordMergeFields(
   docxBuffer: Buffer,
@@ -168,6 +295,8 @@ export async function fillWordMergeFields(
     const xmlFile = zip.file(entry);
     if (!xmlFile) continue;
     let xml = await xmlFile.async("string");
+
+    xml = replaceMergeFieldResults(xml, data);
 
     // Longer names first so e.g. PEC_Avvocato is not partially matched via PEC.
     const entries = Object.entries(data).sort((a, b) => b[0].length - a[0].length);

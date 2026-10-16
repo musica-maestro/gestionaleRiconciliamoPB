@@ -33,6 +33,10 @@ import {
   ensureLetteraIncaricoModello,
 } from "~/lib/lettera-incarico.server";
 import { isUploadedFile } from "~/lib/form-data.server";
+import {
+  MODELLI_VERBALI_FISSI,
+  modelloVerbaleNomeForEsito,
+} from "~/lib/modelli-verbali";
 
 // Converts a "YYYY-MM-DDTHH:MM" string (interpreted as Europe/Rome local time) to a
 // PocketBase-compatible UTC string "YYYY-MM-DD HH:MM:SS.000Z".
@@ -2501,6 +2505,153 @@ function AddFatturaDialog({
   );
 }
 
+function GeneraVerbaleDialog({
+  isOpen,
+  onClose,
+  mediazioneId,
+  esitoFinale,
+  preferNr,
+  incontri,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  mediazioneId: string;
+  esitoFinale: string;
+  preferNr: boolean;
+  incontri: Array<{ id: string; data_programmazione: string | null }>;
+}) {
+  const suggestedModello =
+    (preferNr ? modelloVerbaleNomeForEsito("Nessuna risposta") : null) ||
+    modelloVerbaleNomeForEsito(esitoFinale) ||
+    null;
+  const [modello, setModello] = useState(
+    suggestedModello || MODELLI_VERBALI_FISSI[0]?.nome || "",
+  );
+  const [incontroId, setIncontroId] = useState(incontri[0]?.id ?? "");
+
+  useEffect(() => {
+    if (!isOpen) return;
+    // Preseleziona in base all'esito se c'è, ma l'utente può sempre cambiare.
+    setModello(suggestedModello || MODELLI_VERBALI_FISSI[0]?.nome || "");
+    setIncontroId(incontri[0]?.id ?? "");
+  }, [isOpen, suggestedModello, incontri]);
+
+  if (!isOpen) return null;
+
+  const params = new URLSearchParams();
+  if (modello) params.set("modello", modello);
+  if (incontroId) params.set("incontro", incontroId);
+  const href = `/mediazioni/${mediazioneId}/verbale?${params.toString()}`;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <button
+        type="button"
+        className="absolute inset-0 bg-slate-900/40"
+        aria-label="Chiudi"
+        onClick={onClose}
+      />
+      <div className="relative z-10 w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-5 shadow-xl space-y-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-slate-800">Genera verbale</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Scegli quale verbale scaricare (indipendente dall&apos;esito della mediazione), poi
+              compila e scarica il Word.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+            aria-label="Chiudi"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <fieldset className="space-y-2">
+          <legend className={EDIT_LABEL}>Tipo di verbale</legend>
+          {esitoFinale ? (
+            <p className="text-[11px] text-slate-500 -mt-1 mb-1">
+              Esito attuale: <span className="font-medium text-slate-700">{esitoFinale}</span>
+              {suggestedModello ? " — preselezionato, puoi cambiarlo." : null}
+            </p>
+          ) : null}
+          <div className="grid grid-cols-2 gap-2">
+            {MODELLI_VERBALI_FISSI.map((m) => {
+              const selected = modello === m.nome;
+              const suggested = suggestedModello === m.nome;
+              return (
+                <label
+                  key={m.nome}
+                  className={`flex cursor-pointer items-start gap-2 rounded-lg border px-2.5 py-2 text-sm ${
+                    selected
+                      ? "border-[#3aaeba] bg-[#3aaeba]/10"
+                      : "border-slate-200 hover:bg-slate-50"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="verbale_modello"
+                    className="mt-0.5 shrink-0"
+                    checked={selected}
+                    onChange={() => setModello(m.nome)}
+                  />
+                  <span className="min-w-0">
+                    <span className="font-medium text-slate-800 leading-snug">{m.nome}</span>
+                    <span className="block text-[11px] text-slate-500 mt-0.5">
+                      {m.esito}
+                      {suggested ? " · suggerito" : ""}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </fieldset>
+
+        <div>
+          <label className={EDIT_LABEL}>Incontro (data/ora nel verbale)</label>
+          <select
+            className={EDIT_INPUT}
+            value={incontroId}
+            onChange={(e) => setIncontroId(e.target.value)}
+          >
+            {incontri.length === 0 && <option value="">Nessun incontro</option>}
+            {incontri.map((i) => (
+              <option key={i.id} value={i.id}>
+                {i.data_programmazione
+                  ? new Date(i.data_programmazione).toLocaleString("it-IT", {
+                      timeZone: "Europe/Rome",
+                    })
+                  : i.id}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex gap-2.5 pt-1">
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Annulla
+          </button>
+          <a
+            href={href}
+            className="flex-1 rounded-lg bg-[#3aaeba] px-3 py-2 text-sm font-semibold text-white text-center hover:bg-[#349aa5]"
+            onClick={onClose}
+          >
+            Scarica Word
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main component ────────────────────────────────────────────────────────────
 
 type Incontro = {
@@ -2550,6 +2701,7 @@ type DialogMode =
   | { type: "addDocumento" }
   | { type: "addFattura" }
   | { type: "editFattura"; fattura: Fattura }
+  | { type: "generaVerbale" }
   | null;
 
 export default function MediazioneDetail() {
@@ -2597,6 +2749,8 @@ export default function MediazioneDetail() {
   }, [editMode]);
 
   const missingConvocazioniFiles = (() => {
+    // Mediazione già chiusa con esito: non ha senso chiedere il PDF raccomandata
+    if (String(mediazione.esito_finale ?? "").trim()) return false;
     const hasRaccomandata = partecipazioni.some((p) =>
       p.convocazioni.some((c) => c.tipologia === "Raccomandata")
     );
@@ -3374,9 +3528,9 @@ export default function MediazioneDetail() {
                 <button
                   type="button"
                   className="rounded-lg bg-[#3aaeba] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#349aa5]"
-                  onClick={() => setSearchParams({ tab: "incontri" })}
+                  onClick={() => setDialogMode({ type: "generaVerbale" })}
                 >
-                  Vai a incontri / verbale
+                  Genera verbale NR
                 </button>
               ) : (
                 <button
@@ -3402,7 +3556,7 @@ export default function MediazioneDetail() {
           <button
             type="button"
             className="w-full rounded-lg bg-[#3aaeba] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#349aa5]"
-            onClick={() => setSearchParams({ tab: "incontri" })}
+            onClick={() => setDialogMode({ type: "generaVerbale" })}
           >
             Genera verbale
           </button>
@@ -3525,7 +3679,7 @@ export default function MediazioneDetail() {
 
         {tab === "incontri" && (
           <div className="space-y-3">
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center justify-between mb-1 gap-2 flex-wrap">
               <h2 className="text-sm font-semibold text-slate-800">
                 Incontri
                 {incontri.length > 0 && (
@@ -3534,14 +3688,24 @@ export default function MediazioneDetail() {
                   </span>
                 )}
               </h2>
-              <button
-                type="button"
-                onClick={() => setDialogMode({ type: "addIncontro" })}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-[#3aaeba] px-3 py-1.5 text-white hover:bg-[#349aa5] transition-colors"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                <span className="text-sm font-medium">Aggiungi incontro</span>
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDialogMode({ type: "generaVerbale" })}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[#3aaeba] px-3 py-1.5 text-[#3aaeba] hover:bg-[#3aaeba]/10 transition-colors"
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  <span className="text-sm font-medium">Genera verbale</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDialogMode({ type: "addIncontro" })}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#3aaeba] px-3 py-1.5 text-white hover:bg-[#349aa5] transition-colors"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span className="text-sm font-medium">Aggiungi incontro</span>
+                </button>
+              </div>
             </div>
             {incontri.length === 0 ? (
               <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center">
@@ -4116,6 +4280,15 @@ export default function MediazioneDetail() {
         convocazione={dialogMode?.type === "editConvocazione" ? dialogMode.convocazione : null}
         onClose={closeDialog}
         motivoRaccomandataOpzioni={motivoRaccomandataOpzioni}
+      />
+
+      <GeneraVerbaleDialog
+        isOpen={dialogMode?.type === "generaVerbale"}
+        onClose={closeDialog}
+        mediazioneId={mediazione.id}
+        esitoFinale={String(mediazione.esito_finale ?? "")}
+        preferNr={mediazione.azione_raccomandata === "verbale_nessuna_risposta"}
+        incontri={incontri}
       />
     </div>
   );

@@ -149,6 +149,13 @@ async function attachComunicazioneMancataConsegna(
 }
 
 /**
+ * Temporaneamente disattivato: mantiene classificazione/notify/lettera nel codice
+ * ma non parte più da create/update/import raccomandata.
+ * Rimetti a `true` per riattivare banner, notifiche e documento automatico.
+ */
+const AZIONE_RACCOMANDATA_AUTOMATICA_ABILITATA = false;
+
+/**
  * Evaluate raccomandata esito after create/update and flag mediazione + notify + letter.
  */
 export async function processAzioneRaccomandata(opts: {
@@ -158,6 +165,10 @@ export async function processAzioneRaccomandata(opts: {
   motivoRaccomandata?: string | null;
   attoreId?: string;
 }): Promise<{ azione: AzioneRaccomandata | null; letterOk?: boolean; letterError?: string }> {
+  if (!AZIONE_RACCOMANDATA_AUTOMATICA_ABILITATA) {
+    return { azione: null };
+  }
+
   const { pb, mediazioneId } = opts;
   const esito = joinEsitoRaccomandata(opts.statoRaccomandata, opts.motivoRaccomandata);
   if (!esito) return { azione: null };

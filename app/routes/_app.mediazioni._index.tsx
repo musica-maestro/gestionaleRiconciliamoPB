@@ -797,6 +797,9 @@ export default function MediazioniList() {
                 <li>
                   <Link to="/mediazioni/chiudi">Chiudi mediazioni</Link>
                 </li>
+                <li>
+                  <Link to="/mediazioni/aggiornamento">Aggiornamento raccomandate</Link>
+                </li>
               </ul>
             </div>
           )}
