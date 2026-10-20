@@ -1,18 +1,25 @@
 import type { EsitoFinale } from "~/lib/esito-finale";
 import { ESITO_FINALE_VALUES } from "~/lib/esito-finale";
 
-/** Fixed model names in `modelli_documenti` — one verbale per esito finale. */
+/** Fixed model names in `modelli_documenti` — one verbale per esito finale (+ prosecuzione). */
 export const MODELLO_VERBALE_ACCORDO = "Verbale accordo";
 export const MODELLO_VERBALE_MANCATO_ACCORDO = "Verbale mancato accordo";
-export const MODELLO_VERBALE_NESSUNA_RISPOSTA = "Verbale Nessuna Risposta";
+export const MODELLO_VERBALE_MANCATO_RISCONTRO = "Verbale Mancato riscontro";
+/** @deprecated alias — stesso modello di Mancato riscontro */
+export const MODELLO_VERBALE_NESSUNA_RISPOSTA = MODELLO_VERBALE_MANCATO_RISCONTRO;
 export const MODELLO_VERBALE_MANCATA_COMPARIZIONE = "Verbale mancata comparizione";
 export const MODELLO_VERBALE_MANCATA_ADESIONE = "Verbale mancata adesione";
 export const MODELLO_VERBALE_CHIUSA_UFFICIO = "Verbale chiusa d'ufficio";
 export const MODELLO_VERBALE_RITIRATA = "Verbale ritirata";
+export const MODELLO_VERBALE_PROSECUZIONE = "Verbale di prosecuzione";
+
+/** Legacy nome in `modelli_documenti` / file Word già caricati. */
+export const MODELLO_VERBALE_NESSUNA_RISPOSTA_LEGACY = "Verbale Nessuna Risposta";
 
 export type ModelloVerbaleMeta = {
   nome: string;
-  esito: EsitoFinale;
+  /** `null` = non legato a un esito di chiusura (es. prosecuzione). */
+  esito: EsitoFinale | null;
   descrizione: string;
 };
 
@@ -28,9 +35,9 @@ export const MODELLI_VERBALI_FISSI: readonly ModelloVerbaleMeta[] = [
     descrizione: "Verbale di chiusura per mancato raggiungimento dell'accordo.",
   },
   {
-    nome: MODELLO_VERBALE_NESSUNA_RISPOSTA,
-    esito: "Nessuna risposta",
-    descrizione: "Verbale Nessuna Risposta (parte chiamata non aderisce / non risponde).",
+    nome: MODELLO_VERBALE_MANCATO_RISCONTRO,
+    esito: "Mancato riscontro",
+    descrizione: "Verbale Mancato riscontro (parte chiamata non aderisce / non risponde).",
   },
   {
     nome: MODELLO_VERBALE_MANCATA_COMPARIZIONE,
@@ -52,17 +59,28 @@ export const MODELLI_VERBALI_FISSI: readonly ModelloVerbaleMeta[] = [
     esito: "Ritirata",
     descrizione: "Verbale di mediazione ritirata.",
   },
+  {
+    nome: MODELLO_VERBALE_PROSECUZIONE,
+    esito: null,
+    descrizione: "Verbale di prosecuzione del procedimento (rinvio a nuovo incontro).",
+  },
 ] as const;
 
 export const MODELLI_VERBALI_NOMI = MODELLI_VERBALI_FISSI.map((m) => m.nome);
 
 const BY_ESITO = new Map<EsitoFinale, string>(
-  MODELLI_VERBALI_FISSI.map((m) => [m.esito, m.nome]),
+  MODELLI_VERBALI_FISSI.filter((m) => m.esito != null).map((m) => [m.esito!, m.nome]),
 );
 
 const BY_NOME = new Map<string, ModelloVerbaleMeta>(
   MODELLI_VERBALI_FISSI.map((m) => [m.nome, m]),
 );
+// Legacy DB / UI name → stesso meta del Mancato riscontro
+BY_NOME.set(MODELLO_VERBALE_NESSUNA_RISPOSTA_LEGACY, {
+  nome: MODELLO_VERBALE_MANCATO_RISCONTRO,
+  esito: "Mancato riscontro",
+  descrizione: "Verbale Mancato riscontro (parte chiamata non aderisce / non risponde).",
+});
 
 export function modelloVerbaleNomeForEsito(esito: string | null | undefined): string | null {
   const v = String(esito ?? "").trim() as EsitoFinale;
@@ -72,6 +90,17 @@ export function modelloVerbaleNomeForEsito(esito: string | null | undefined): st
 
 export function modelloVerbaleMetaByNome(nome: string): ModelloVerbaleMeta | null {
   return BY_NOME.get(nome) ?? null;
+}
+
+/**
+ * Resolve the `modelli_documenti.nome` to load.
+ * Accepts the new canonical name and the legacy "Verbale Nessuna Risposta".
+ */
+export function resolveModelloDocumentiNome(nome: string): string {
+  if (nome === MODELLO_VERBALE_NESSUNA_RISPOSTA_LEGACY) {
+    return MODELLO_VERBALE_MANCATO_RISCONTRO;
+  }
+  return nome;
 }
 
 /**
@@ -109,6 +138,11 @@ export const VERBALE_MERGE_FIELDS = [
     name: "AVV_ISTANTE",
     source: "primo avvocato dell'istante (nome+cognome)",
     note: "Avvocato parte istante (i modelli storici riusano questo campo anche per il chiamato)",
+  },
+  {
+    name: "PEC_AVV_ISTANTE",
+    source: "avvocati.pec (istante)",
+    note: "PEC dell'avvocato istante",
   },
   {
     name: "Foro_",
@@ -153,13 +187,18 @@ export const VERBALE_MERGE_FIELDS = [
   },
   {
     name: "NUMERO_RACCOMANDATA_CHIAMATO",
-    source: "convocazioni.numero_raccomandata (parte chiamata, ultima Raccomandata)",
+    source: "convocazioni.numero_raccomandata (parte chiamata, raccomandata migliore)",
     note: "N. raccomandata inviata al chiamato",
   },
   {
     name: "DATA_INVIO_RACCOMANDATA_CHIAMATO",
-    source: "convocazioni.data_invio (parte chiamata, ultima Raccomandata)",
+    source: "convocazioni.data_invio (parte chiamata, raccomandata migliore)",
     note: "Data invio raccomandata al chiamato (dd/MM/yyyy)",
+  },
+  {
+    name: "ESITO_RACCOMANDATA_CHIAMATO",
+    source: "convocazioni.stato_raccomandata + motivo_raccomandata (join)",
+    note: "Esito della raccomandata di conciliazione (es. Consegnata, Destinatario irreperibile…)",
   },
 ] as const;
 

@@ -300,8 +300,8 @@ export function normalizeCheckEsito(raw: string): string {
   if (!trimmed) return "";
   const key = trimmed.toLowerCase().replace(/\s+/g, " ");
   if (key === "aperta" || key === "non consegnabile" || key === "esito gestionale") return "";
-  if (key === "nr" || key === "nessuna risposta") {
-    return "Nessuna risposta";
+  if (key === "nr" || key === "nessuna risposta" || key === "mancato riscontro") {
+    return "Mancato riscontro";
   }
   if (key === "mancata comparizione") return "Mancata comparizione";
   if (key === "accordo") return "Accordo";

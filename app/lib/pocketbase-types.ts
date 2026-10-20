@@ -87,7 +87,7 @@ export enum DashboardChiusePerEsitoMeseEsitoFinaleOptions {
   "Mancato accordo" = "Mancato accordo",
   "Mancata comparizione" = "Mancata comparizione",
   "Mancata adesione" = "Mancata adesione",
-  "Nessuna risposta" = "Nessuna risposta",
+  "Mancato riscontro" = "Mancato riscontro",
   "Chiusa d'ufficio" = "Chiusa d'ufficio",
   "Ritirata" = "Ritirata",
 }
@@ -97,7 +97,7 @@ export enum MediazioniEsitoFinaleOptions {
   "Mancato accordo" = "Mancato accordo",
   "Mancata comparizione" = "Mancata comparizione",
   "Mancata adesione" = "Mancata adesione",
-  "Nessuna risposta" = "Nessuna risposta",
+  "Mancato riscontro" = "Mancato riscontro",
   "Chiusa d'ufficio" = "Chiusa d'ufficio",
   "Ritirata" = "Ritirata",
 }
@@ -120,7 +120,7 @@ export enum MediazioniViewEsitoFinaleOptions {
   "Mancato accordo" = "Mancato accordo",
   "Mancata comparizione" = "Mancata comparizione",
   "Mancata adesione" = "Mancata adesione",
-  "Nessuna risposta" = "Nessuna risposta",
+  "Mancato riscontro" = "Mancato riscontro",
   "Chiusa d'ufficio" = "Chiusa d'ufficio",
   "Ritirata" = "Ritirata",
 }

@@ -1,5 +1,5 @@
 /** Valori canonici esito_finale (ordine UI). */
-export const ESITO_FINALE_VALUES = ["Accordo", "Mancato accordo", "Mancata comparizione", "Mancata adesione", "Nessuna risposta", "Chiusa d'ufficio", "Ritirata"] as const;
+export const ESITO_FINALE_VALUES = ["Accordo", "Mancato accordo", "Mancata comparizione", "Mancata adesione", "Mancato riscontro", "Chiusa d'ufficio", "Ritirata"] as const;
 
 export type EsitoFinale = (typeof ESITO_FINALE_VALUES)[number];
 
@@ -15,7 +15,7 @@ export const ESITO_FINALE_COLORS: Record<EsitoFinale, string> = {
   "Mancato accordo": "#92400e", // brown
   "Mancata comparizione": "#1e3a8a", // dark blue
   "Mancata adesione": "#111827", // black
-  "Nessuna risposta": "#ec4899", // pink
+  "Mancato riscontro": "#ec4899", // pink
   "Chiusa d'ufficio": "#ea580c", // orange
   Ritirata: "#facc15", // yellow
 };
@@ -98,7 +98,7 @@ export function calendarColorKey(opts: {
 }): CalendarStatusKey {
   if (opts.daAttenzionare) return "da_attenzionare";
 
-  const esito = String(opts.esitoFinale ?? "").trim();
+  const esito = normalizeEsitoFinale(String(opts.esitoFinale ?? "").trim());
 
   // Esito di chiusura ha priorità (inclusa Mancata adesione come esito)
   if (esito && esito in ESITO_FINALE_COLORS) {
@@ -128,7 +128,7 @@ export const ESITO_RACCOMANDATA_VALUES = ["Consegnata", "Destinatario irreperibi
 
 export type EsitoRaccomandata = (typeof ESITO_RACCOMANDATA_VALUES)[number];
 
-/** Esiti che → verbale Nessuna Risposta (se incontro passato e no adesione). */
+/** Esiti che → verbale Mancato riscontro (se incontro passato e no adesione). */
 export const ESITI_RACCOMANDATA_VERBALE_NR = ["Invio rifiutato", "Al mittente per compiuta giacenza", "Consegnata"] as const;
 
 /** Esiti che → comunicazione mancata consegna ad avvocato istante. */
@@ -166,8 +166,10 @@ const ALIASES: Record<string, EsitoFinale> = {
   "chiusa d'ufficio": "Chiusa d'ufficio",
   "chiusa d ufficio": "Chiusa d'ufficio",
   ritirata: "Ritirata",
-  "nessuna risposta": "Nessuna risposta",
-  nr: "Nessuna risposta",
+  "mancato riscontro": "Mancato riscontro",
+  // Legacy label (pre-rinomina)
+  "nessuna risposta": "Mancato riscontro",
+  nr: "Mancato riscontro",
   "mancata comparizione": "Mancata comparizione",
   "nessuna adesione": "Mancata adesione",
   "mancata adesione": "Mancata adesione",
@@ -216,6 +218,8 @@ export function calendarColorLabel(key: CalendarStatusKey): string {
   if (key in CALENDAR_STATO_LABELS) {
     return CALENDAR_STATO_LABELS[key as CalendarStatoKey];
   }
+  // Legacy DB value still stored before retroactive rename
+  if (key === ("Nessuna risposta" as CalendarStatusKey)) return "Mancato riscontro";
   return key;
 }
 
@@ -239,6 +243,6 @@ export const AZIONE_RACCOMANDATA_STATO_VALUES = ["da_fare", "evasa"] as const;
 export type AzioneRaccomandataStato = (typeof AZIONE_RACCOMANDATA_STATO_VALUES)[number];
 
 export const AZIONE_RACCOMANDATA_LABELS: Record<AzioneRaccomandata, string> = {
-  verbale_nessuna_risposta: "Verbale Nessuna Risposta",
+  verbale_nessuna_risposta: "Verbale Mancato riscontro",
   comunicazione_mancata_consegna: "Comunicazione mancata consegna",
 };

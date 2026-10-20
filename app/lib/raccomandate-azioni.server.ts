@@ -91,7 +91,7 @@ async function notifyManagers(
     const label = AZIONE_RACCOMANDATA_LABELS[azione];
     const messaggio =
       azione === "verbale_nessuna_risposta"
-        ? `Da fare: verbale Nessuna Risposta${rgm ? ` (RGM ${rgm})` : ""}.`
+        ? `Da fare: verbale Mancato riscontro${rgm ? ` (RGM ${rgm})` : ""}.`
         : `Da fare: comunicazione mancata consegna${rgm ? ` (RGM ${rgm})` : ""}.`;
 
     for (const u of managers) {

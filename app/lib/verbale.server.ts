@@ -2,10 +2,13 @@ import type PocketBase from "pocketbase";
 import { fillWordMergeFields } from "~/lib/docx-merge-fields.server";
 import {
   MODELLI_VERBALI_NOMI,
+  MODELLO_VERBALE_MANCATO_RISCONTRO,
+  MODELLO_VERBALE_NESSUNA_RISPOSTA_LEGACY,
   modelloVerbaleMetaByNome,
   modelloVerbaleNomeForEsito,
+  resolveModelloDocumentiNome,
 } from "~/lib/modelli-verbali";
-import { normalizeEsitoFinale } from "~/lib/esito-finale";
+import { joinEsitoRaccomandata, normalizeEsitoFinale } from "~/lib/esito-finale";
 
 const MONTHS_IT = [
   "gennaio",
@@ -34,8 +37,17 @@ type SoggettoLite = {
 type AvvocatoLite = {
   nome?: string;
   cognome?: string;
+  pec?: string;
   foro_di_appartenenza?: string;
   numero_tessera_foro?: string;
+};
+
+type RaccomandataChiamatoLite = {
+  numero_raccomandata?: string;
+  data_invio?: string;
+  stato_raccomandata?: string;
+  motivo_raccomandata?: string;
+  created?: string;
 };
 
 function partsInRome(d: Date): {
@@ -120,19 +132,34 @@ export async function loadModelloVerbaleBuffer(
   pb: PocketBase,
   nome: string,
 ): Promise<{ buffer: Buffer; modelloId: string } | { error: string }> {
-  const filterNome = nome.replace(/"/g, '\\"');
-  const active = await pb.collection("modelli_documenti").getList(1, 1, {
-    filter: `nome = "${filterNome}" && attivo = true`,
-    sort: "-updated",
-  });
-  let modello = active.items[0] as { id: string; file?: string } | undefined;
-  if (!modello) {
-    const any = await pb.collection("modelli_documenti").getList(1, 1, {
-      filter: `nome = "${filterNome}"`,
+  const candidates = [resolveModelloDocumentiNome(nome)];
+  if (
+    nome === MODELLO_VERBALE_MANCATO_RISCONTRO ||
+    nome === MODELLO_VERBALE_NESSUNA_RISPOSTA_LEGACY
+  ) {
+    for (const alt of [MODELLO_VERBALE_MANCATO_RISCONTRO, MODELLO_VERBALE_NESSUNA_RISPOSTA_LEGACY]) {
+      if (!candidates.includes(alt)) candidates.push(alt);
+    }
+  }
+
+  let modello: { id: string; file?: string } | undefined;
+  for (const candidate of candidates) {
+    const filterNome = candidate.replace(/"/g, '\\"');
+    const active = await pb.collection("modelli_documenti").getList(1, 1, {
+      filter: `nome = "${filterNome}" && attivo = true`,
       sort: "-updated",
     });
-    modello = any.items[0] as { id: string; file?: string } | undefined;
+    modello = active.items[0] as { id: string; file?: string } | undefined;
+    if (!modello) {
+      const any = await pb.collection("modelli_documenti").getList(1, 1, {
+        filter: `nome = "${filterNome}"`,
+        sort: "-updated",
+      });
+      modello = any.items[0] as { id: string; file?: string } | undefined;
+    }
+    if (modello?.file) break;
   }
+
   if (!modello?.file) {
     return {
       error: `Modello "${nome}" mancante o senza file. Caricalo in Impostazioni → Modelli.`,
@@ -151,10 +178,15 @@ export function resolveModelloVerbaleNome(opts: {
 }): { nome: string } | { error: string } {
   const requested = String(opts.modello ?? "").trim();
   if (requested) {
-    if (!modelloVerbaleMetaByNome(requested) && !MODELLI_VERBALI_NOMI.includes(requested)) {
+    const canonical = resolveModelloDocumentiNome(requested);
+    if (
+      !modelloVerbaleMetaByNome(requested) &&
+      !modelloVerbaleMetaByNome(canonical) &&
+      !MODELLI_VERBALI_NOMI.includes(canonical)
+    ) {
       return { error: `Modello verbale non riconosciuto: "${requested}".` };
     }
-    return { nome: requested };
+    return { nome: canonical };
   }
   const esito = normalizeEsitoFinale(String(opts.esito ?? "").trim());
   if (!esito) {
@@ -186,6 +218,7 @@ export function buildVerbaleMergeData(opts: {
   incontroDate: Date | null;
   numeroRaccomandataChiamato?: string;
   dataInvioRaccomandataChiamato?: Date | null;
+  esitoRaccomandataChiamato?: string;
 }): Record<string, string> {
   const {
     mediazione,
@@ -198,6 +231,7 @@ export function buildVerbaleMergeData(opts: {
     incontroDate,
     numeroRaccomandataChiamato = "",
     dataInvioRaccomandataChiamato = null,
+    esitoRaccomandataChiamato = "",
   } = opts;
 
   const oggettoRaw = String(mediazione.oggetto ?? "").trim();
@@ -237,6 +271,7 @@ export function buildVerbaleMergeData(opts: {
     ISTANTE: soggettoDisplayName(istante),
     CF_ISTANTE: soggettoCf(istante),
     AVV_ISTANTE: avvocatoDisplay(avvIstante),
+    PEC_AVV_ISTANTE: String(avvIstante?.pec ?? "").trim(),
     Foro_: String(avvIstante?.foro_di_appartenenza ?? "").trim(),
     Tessera: String(avvIstante?.numero_tessera_foro ?? "").trim(),
     NOME_CHIAMATO: nomeChiamato,
@@ -250,7 +285,32 @@ export function buildVerbaleMergeData(opts: {
     DATA_INVIO_RACCOMANDATA_CHIAMATO: dataInvioRaccomandataChiamato
       ? formatDataSlash(dataInvioRaccomandataChiamato)
       : "",
+    ESITO_RACCOMANDATA_CHIAMATO: String(esitoRaccomandataChiamato ?? "").trim(),
   };
+}
+
+/**
+ * Pick the best Raccomandata among chiamati.
+ * Prefer rows with numero, then data_invio, then newest created.
+ * IMPORTANT: PocketBase on this project rejects multi-field `sort` (e.g. `-data_invio,-created`)
+ * with a generic 500 — always sort in JS.
+ */
+function pickBestRaccomandataChiamato(
+  rows: RaccomandataChiamatoLite[],
+): RaccomandataChiamatoLite | null {
+  if (rows.length === 0) return null;
+  const scored = [...rows].sort((a, b) => {
+    const aNum = String(a.numero_raccomandata ?? "").trim() ? 1 : 0;
+    const bNum = String(b.numero_raccomandata ?? "").trim() ? 1 : 0;
+    if (aNum !== bNum) return bNum - aNum;
+    const aData = a.data_invio || "";
+    const bData = b.data_invio || "";
+    if (aData !== bData) return bData.localeCompare(aData);
+    const aCreated = a.created || "";
+    const bCreated = b.created || "";
+    return bCreated.localeCompare(aCreated);
+  });
+  return scored[0] ?? null;
 }
 
 function asId(value: unknown): string {
@@ -361,19 +421,34 @@ export async function generateVerbaleDocx(
 
   let numeroRaccomandataChiamato = "";
   let dataInvioRaccomandataChiamato: Date | null = null;
-  const chiamatoPartecipazioneId = asId(chiamatoPart?.id);
-  if (chiamatoPartecipazioneId) {
+  let esitoRaccomandataChiamato = "";
+  const chiamatoPartecipazioneIds = partecipazioni
+    .filter(
+      (p) =>
+        String((p as { istante_o_chiamato?: string }).istante_o_chiamato) === "Chiamato",
+    )
+    .map((p) => asId((p as { id?: unknown }).id))
+    .filter(Boolean);
+
+  if (chiamatoPartecipazioneIds.length > 0) {
     try {
-      const racc = await pb.collection("convocazioni").getList(1, 1, {
-        filter: `partecipazione = "${chiamatoPartecipazioneId}" && tipologia = "Raccomandata"`,
-        sort: "-data_invio,-created",
+      // Single-field sort only: multi-field sort (-data_invio,-created) 500s on this PB.
+      const racc = await pb.collection("convocazioni").getFullList({
+        filter: `(${chiamatoPartecipazioneIds
+          .map((id) => `partecipazione = "${id}"`)
+          .join(" || ")}) && tipologia = "Raccomandata"`,
+        sort: "-data_invio",
       });
-      const row = racc.items[0] as
-        | { numero_raccomandata?: string; data_invio?: string }
-        | undefined;
-      if (row) {
-        numeroRaccomandataChiamato = String(row.numero_raccomandata ?? "").trim();
-        dataInvioRaccomandataChiamato = parsePbDate(row.data_invio);
+      const best = pickBestRaccomandataChiamato(
+        racc as RaccomandataChiamatoLite[],
+      );
+      if (best) {
+        numeroRaccomandataChiamato = String(best.numero_raccomandata ?? "").trim();
+        dataInvioRaccomandataChiamato = parsePbDate(best.data_invio);
+        esitoRaccomandataChiamato = joinEsitoRaccomandata(
+          best.stato_raccomandata,
+          best.motivo_raccomandata,
+        );
       }
     } catch {
       // leave empty
@@ -405,6 +480,7 @@ export async function generateVerbaleDocx(
     incontroDate,
     numeroRaccomandataChiamato,
     dataInvioRaccomandataChiamato,
+    esitoRaccomandataChiamato,
   });
 
   const filled = await fillWordMergeFields(loaded.buffer, data);

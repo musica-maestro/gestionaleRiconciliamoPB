@@ -89,7 +89,8 @@ async function findRaccomandataConvocazioneId(
       .collection("convocazioni")
       .getFullList({
         filter: `partecipazione = "${p.id}" && tipologia = "Raccomandata"`,
-        sort: "-data_invio,-created",
+        // Single-field sort: multi-field (-data_invio,-created) 500s on this PB.
+        sort: "-data_invio",
         fields: "id,data_invio,created,stato_raccomandata",
         requestKey: null,
       })
