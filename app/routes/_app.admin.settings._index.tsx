@@ -918,7 +918,7 @@ export default function AdminSettingsIndex() {
                   <div>
                     <h2 className="font-semibold text-base-content">Modelli verbali</h2>
                     <p className="mt-0.5 text-sm text-base-content/65">
-                      Un modello .docx (stampa unione) per ogni esito finale. Dalla scheda mediazione
+                      Un modello .docx (stampa unione) per ogni esito finale e per la prosecuzione. Dalla scheda mediazione
                       si genera e scarica il Word compilato. Sostituisci il file per aggiornare il
                       testo.
                     </p>
@@ -937,7 +937,7 @@ export default function AdminSettingsIndex() {
                     <FixedModelloCard
                       key={card.nome}
                       nome={card.nome}
-                      descrizione={`${card.descrizione} Esito: ${card.esito}.`}
+                      descrizione={`${card.descrizione}${card.esito ? ` Esito: ${card.esito}.` : ""}`}
                       record={card.record}
                       fileDescription={card.descrizione}
                       compact

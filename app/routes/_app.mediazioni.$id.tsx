@@ -2630,7 +2630,7 @@ function GeneraVerbaleDialog({
   incontri: Array<{ id: string; data_programmazione: string | null }>;
 }) {
   const suggestedModello =
-    (preferNr ? modelloVerbaleNomeForEsito("Nessuna risposta") : null) ||
+    (preferNr ? modelloVerbaleNomeForEsito("Mancato riscontro") : null) ||
     modelloVerbaleNomeForEsito(esitoFinale) ||
     null;
   const [modello, setModello] = useState(
@@ -2710,7 +2710,7 @@ function GeneraVerbaleDialog({
                   <span className="min-w-0">
                     <span className="font-medium text-slate-800 leading-snug">{m.nome}</span>
                     <span className="block text-[11px] text-slate-500 mt-0.5">
-                      {m.esito}
+                      {m.esito ?? "Non di chiusura"}
                       {suggested ? " · suggerito" : ""}
                     </span>
                   </span>
@@ -3626,7 +3626,7 @@ export default function MediazioneDetail() {
             </p>
             <p className="text-xs text-amber-900/90">
               {mediazione.azione_raccomandata === "verbale_nessuna_risposta"
-                ? "Predisporre verbale di Nessuna Risposta (incontro passato, senza adesione)."
+                ? "Predisporre verbale di Mancato riscontro (incontro passato, senza adesione)."
                 : "Comunicazione di mancata consegna all'avvocato istante (documento generato in Documenti)."}
             </p>
             {mediazione.azione_raccomandata_nota ? (

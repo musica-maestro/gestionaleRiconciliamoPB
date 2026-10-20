@@ -612,7 +612,7 @@ export default function Dashboard() {
                       <p className="font-medium text-orange-800">{m.improcedibile}</p>
                     </div>
                     <div className="rounded bg-base-200 px-3 py-2">
-                      <span className="text-base-content/70">Nessuna risposta</span>
+                      <span className="text-base-content/70">Mancato riscontro</span>
                       <p className="font-medium text-base-content">{m.chiusa_ufficio}</p>
                     </div>
                   </div>
